@@ -10,8 +10,10 @@ dist-widget/
 .env.local
 .env*.local
 
-# local runtime data (issue audio, snapshots)
-data/
+# local runtime data (issue audio, snapshots) — root folder only.
+# NOTE: anchored with leading slash so src/frontend/src/data/ (pricing tiers)
+# stays tracked. Bare `data/` would shadow it on Linux/Docker and break the build.
+/data/
 
 # logs
 *.log

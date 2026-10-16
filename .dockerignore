@@ -2,7 +2,11 @@ node_modules
 src/frontend/dist
 src/frontend/dist-widget
 src/backend/dist
-data
+# Root-level local runtime data only — anchored so src/frontend/src/data/
+# (pricing tiers, bundled by vite) is still sent to the Docker build context.
+# Bare `data` would exclude it and break `vite build` with
+# `Could not resolve "../data/plans"`.
+/data
 .env
 .env.local
 *.log
