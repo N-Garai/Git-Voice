@@ -1,0 +1,29 @@
+# dependencies & build output
+node_modules/
+dist/
+dist-widget/
+*.tsbuildinfo
+.tmp/
+
+# environment & secrets
+.env
+.env.local
+.env*.local
+
+# local runtime data (issue audio, snapshots)
+data/
+
+# logs
+*.log
+npm-debug.log*
+
+# editor
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# internal working folders (not part of the published project)
+.agent/
+roadmap/
+.freebuff/

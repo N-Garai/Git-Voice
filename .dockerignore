@@ -1,0 +1,13 @@
+node_modules
+src/frontend/dist
+src/frontend/dist-widget
+src/backend/dist
+data
+.env
+.env.local
+*.log
+.git
+.vscode
+.idea
+.agent
+roadmap

@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: git-voice
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: APP_BASE_URL
+        value: https://git-voice.onrender.com
+      # --- secrets: set these in the Render dashboard, not in this file ---
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GEMMA_MODEL_ID
+        value: gemma-3-27b-it
+      - key: TRANSCRIBE_MODEL_ID
+        value: gemini-2.5-flash
+      - key: EMBEDDING_MODEL_ID
+        value: gemini-embedding-001
+      - key: EMBEDDING_DIM
+        value: "768"
+      - key: DATABASE_URL
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        value: JBFqnCBsd6RMkjVDRZzb
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_DEFAULT_REPO
+        sync: false
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: DASHBOARD_TOKEN
+        sync: false

@@ -1,0 +1,21 @@
+{
+  "name": "@git-voice/frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Git-Voice dashboard, landing page, demo storefront, and embeddable widget bundle.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && vite build --config widget.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^5.4.11"
+  }
+}
