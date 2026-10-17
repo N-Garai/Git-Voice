@@ -216,8 +216,12 @@ CREATE TABLE IF NOT EXISTS git_voice_code_index (
   signature TEXT NOT NULL,
   embedding vector(${dim}) NOT NULL,
   embedder_id TEXT NOT NULL,
+  -- to_tsvector is only IMMUTABLE when its configuration is passed as a
+  -- regconfig constant. Passing the bare string literal makes the whole
+  -- expression STABLE, which newer PostgreSQL (16+) rejects inside a
+  -- GENERATED column with "generation expression is not immutable".
   search_tsv tsvector GENERATED ALWAYS AS (
-    to_tsvector('english',
+    to_tsvector('english'::regconfig,
       coalesce(file_path, '') || ' ' ||
       coalesce(component_name, '') || ' ' ||
       coalesce(route_path, '') || ' ' ||
@@ -277,10 +281,33 @@ export class PgVectorIndex implements VectorIndex {
       await this.pool.query(INDEX_SCHEMA_SQL(config.gemini.embeddingDim));
       this.schemaReady = true;
     } catch (err) {
-      console.warn(
-        "[index] pgvector schema unavailable, staying on the in-process index:",
-        err instanceof Error ? err.message : err
-      );
+      // One bad statement (an extension that needs superuser, an index on a
+      // newer column type) must not hide the rest of the schema, so statements
+      // are retried individually and the specific failure is reported.
+      const message = err instanceof Error ? err.message : String(err);
+      const statements = INDEX_SCHEMA_SQL(config.gemini.embeddingDim)
+        .split(";")
+        .map((s) => s.trim())
+        .filter((s) => s && !s.startsWith("--"));
+      let firstFailure = message;
+      for (const statement of statements) {
+        try {
+          await this.pool.query(statement);
+        } catch (stmtErr) {
+          firstFailure = stmtErr instanceof Error ? stmtErr.message : String(stmtErr);
+          console.warn(`[index] schema statement skipped: ${firstFailure}`);
+        }
+      }
+      // Verify the table the app actually depends on really exists.
+      const check = await this.pool
+        .query(`SELECT to_regclass('git_voice_code_index') AS t`)
+        .catch(() => null);
+      if (check?.rows?.[0]?.t) {
+        this.schemaReady = true;
+        console.warn("[index] pgvector schema partially applied — see warnings above");
+        return;
+      }
+      console.warn("[index] pgvector schema unavailable, staying on the in-process index:", firstFailure);
       throw err;
     }
   }
