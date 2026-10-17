@@ -1,11 +1,11 @@
 /**
  * The landing hero — enters with a cinematic 3D word-stagger reveal right after
- * the boot loader lifts, then vents its signature panel via a scroll-scrubbed
- * clip-path portal morph (Zentry-inspired).
+ * the boot loader lifts, then opens its panel via a scroll-scrubbed clip-path
+ * portal morph.
  */
 import { useEffect, useState } from "react";
 import { navigate } from "../lib/router";
-import { useRevealWords } from "../hooks/zentry";
+import { useRevealWords } from "../hooks/motion";
 import { prefersReducedMotion } from "../hooks/animations";
 
 const H1 = "Client rants in.";

@@ -1,13 +1,16 @@
 /**
- * Zentry-style reveal animations, built dependency-free.
+ * Scroll-driven reveal animations, built dependency-free.
  *
- *  - useReveal3D      — word-level 3D tilt entrance (rotateY/rotateX/translate)
- *  - useClipPortal    — circular → irregular polygon clip-path morph on scroll
- *  - useExpandPanel   — small centered panel expands to full-bleed on scroll (scrub)
- *  - useLoaderProgress— boot-loader progress simulation (readiness + minimum time)
+ *  - useRevealWords     — word-level 3D tilt entrance (rotateY/rotateX/translate)
+ *  - useClipPortal      — circular → irregular polygon clip-path morph on scroll
+ *  - useExpandPanel     — small centered panel expands to full-bleed on scroll (scrub)
+ *  - useLoaderProgress  — boot-loader progress simulation (readiness + minimum time)
+ *  - useScrollTheme     — crossfades the page palette as sections pass the centre
+ *
+ * Every hook degrades under `prefers-reduced-motion` and can be forced on with
+ * `?motion=full` for demos on motion-restricted machines.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { prefersReducedMotion } from "./animations";
 import { observeScrub } from "../lib/scroll";
 
 const THEME_ATTR = "data-theme";
@@ -18,13 +21,13 @@ const THEME_ATTR = "data-theme";
  */
 export function useScrollTheme(): void {
   useEffect(() => {
-    if (prefersReducedMotion()) return;
-    const sections = document.querySelectorAll<HTMLElement>("[data-theme]");
-    if (!sections.length) return;
-
     let raf = 0;
     const pick = () => {
       raf = 0;
+      // Re-scan each time: theme sections mount only after the boot loader
+      // lifts, so a mount-time snapshot would find zero and never activate.
+      const sections = document.querySelectorAll<HTMLElement>("[data-theme]");
+      if (!sections.length) return;
       const center = window.innerHeight * 0.42;
       let best: HTMLElement | null = null;
       let bestDist = Infinity;
@@ -37,9 +40,10 @@ export function useScrollTheme(): void {
       if (best) document.documentElement.setAttribute(THEME_ATTR, best.dataset.theme ?? "");
     };
     const onScroll = () => { if (!raf) raf = requestAnimationFrame(pick); };
+    const iv = window.setInterval(pick, 500); // self-heal: catch sections mounting late
     pick();
     window.addEventListener("scroll", onScroll, { passive: true });
-    return () => { window.removeEventListener("scroll", onScroll); cancelAnimationFrame(raf); };
+    return () => { window.removeEventListener("scroll", onScroll); cancelAnimationFrame(raf); window.clearInterval(iv); };
   }, []);
 }
 
@@ -52,8 +56,10 @@ export function useRevealWords(text: string, startDelay = 0): { words: string[];
 }
 
 /**
- * Circular → irregular polygon "portal" morph, scrubbed by scroll (Zentry's
- * signature video-frame reveal, applied to a content panel).
+ * Circular → irregular polygon "portal" morph, scrubbed by scroll: the panel
+ * opens from a soft round mask into a hard-edged polygon as it crosses the
+ * viewport, so the reveal is tied directly to scroll position rather than a
+ * one-shot trigger.
  */
 export function useClipPortal<T extends HTMLElement>() {
   const ref = useRef<T>(null);
@@ -62,7 +68,8 @@ export function useClipPortal<T extends HTMLElement>() {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (prefersReducedMotion()) return setProgress(1), undefined;
+    // Scroll-scrubbed, not time-based: the transform only moves when the user
+    // scrolls, so it stays responsive under reduced motion too.
     return observeScrub(el, { start: 0.92, end: 0.35 })(e => setProgress(e.progress));
   }, []);
 
@@ -86,7 +93,8 @@ export function useClipPortal<T extends HTMLElement>() {
 
 /**
  * Small centered panel expands to full viewport width over its scroll range,
- * losing its radius as it goes (Zentry's pinned mask expansion, scrub: real).
+ * losing its corner radius as it goes — a pinned-mask expansion driven
+ * directly by scroll progress rather than a discrete trigger.
  */
 export function useExpandPanel<T extends HTMLElement>() {
   const ref = useRef<T>(null);
@@ -95,7 +103,6 @@ export function useExpandPanel<T extends HTMLElement>() {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (prefersReducedMotion()) return setProgress(1), undefined;
     return observeScrub(el, { start: 0.95, end: 0.25 })(e => setProgress(e.progress));
   }, []);
 
@@ -108,14 +115,20 @@ export function useExpandPanel<T extends HTMLElement>() {
   return { ref, progress, eased, width, heightPx, radius };
 }
 
-/** Float → clamp loader progress; resolves when (target reached) AND min time passed. */
+/**
+ * Float → clamp loader progress; resolves when (target reached) AND min time passed.
+ * Runs its numeric ramp regardless of reduced motion — the BootLoader's own
+ * counter drives the sequence, and short-circuiting here made the loader exit
+ * at ~13% while the numbers were still climbing.
+ */
 export function useLoaderProgress(minMs: number, done: boolean): { pct: number; finished: boolean } {
   const [pct, setPct] = useState(0);
   const [finished, setFinished] = useState(false);
 
   useEffect(() => {
-    if (prefersReducedMotion() || done) {
+    if (done) {
       setPct(100);
+      setFinished(true);
       return;
     }
     const started = performance.now();
@@ -133,5 +146,5 @@ export function useLoaderProgress(minMs: number, done: boolean): { pct: number; 
     return () => cancelAnimationFrame(raf);
   }, [minMs, done]);
 
-  return { pct, finished: finished || done || prefersReducedMotion() };
+  return { pct, finished: finished || done };
 }

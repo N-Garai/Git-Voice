@@ -5,7 +5,7 @@
  * and the hero enters.
  */
 import { useEffect, useState } from "react";
-import { useLoaderProgress } from "../hooks/zentry";
+import { useLoaderProgress } from "../hooks/motion";
 
 const BOOT_LINES = [
   { t: "$ git-voice boot --power-on", cls: "cmd" },
@@ -30,7 +30,8 @@ export default function BootLoader({ onDone }: { onDone: () => void }): JSX.Elem
   const [lines, setLines] = useState(0);
   const [exiting, setExiting] = useState(false);
   const [gone, setGone] = useState(false);
-  const { finished } = useLoaderProgress(9500, false);
+  const BOOT_DURATION = 7000; // full machine boot (was 9500ms)
+  const { finished } = useLoaderProgress(BOOT_DURATION, false);
 
   // Boot log lines reveal with progress.
   useEffect(() => {
@@ -42,7 +43,7 @@ export default function BootLoader({ onDone }: { onDone: () => void }): JSX.Elem
     let raf = 0;
     const started = performance.now();
     const tick = (now: number) => {
-      const t = Math.min(1, (now - started) / 9500);
+      const t = Math.min(1, (now - started) / BOOT_DURATION);
       setPct(Math.floor((1 - Math.pow(1 - t, 2.2)) * 100));
       if (t < 1) raf = requestAnimationFrame(tick);
     };
@@ -55,9 +56,9 @@ export default function BootLoader({ onDone }: { onDone: () => void }): JSX.Elem
   // Auto-handoff shortly after 100%: kick the exit wipe, then unmount.
   useEffect(() => {
     if (!ready) return;
-    const a = setTimeout(() => setExiting(true), 600);
-    const b = setTimeout(() => setGone(true), 1900);
-    const c = setTimeout(onDone, 2000);
+    const a = setTimeout(() => setExiting(true), 500);
+    const b = setTimeout(() => setGone(true), 1600);
+    const c = setTimeout(onDone, 1700);
     return () => { clearTimeout(a); clearTimeout(b); clearTimeout(c); };
   }, [ready, onDone]);
 

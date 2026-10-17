@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { SiteHeader, SiteFooter } from "../components/Chrome";
 import { useScrollReveal, SplitChars, prefersReducedMotion, usePageReveals } from "../hooks/animations";
-import { useRevealWords } from "../hooks/zentry";
+import { useRevealWords } from "../hooks/motion";
 import { navigate } from "../lib/router";
 import { PLANS } from "../data/plans";
 

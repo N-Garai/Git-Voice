@@ -1,5 +1,5 @@
 /**
- * Landing page — boot loader gate, cinematic hero, then Zentry-style scroll
+ * Landing page — boot loader gate, cinematic hero, then scroll-scrubbed
  * storytelling: a portal-morph showcase, an expanding full-bleed panel, the
  * pipeline machine, features, and the pricing teaser.
  */
@@ -8,7 +8,7 @@ import BootLoader from "../components/BootLoader";
 import Hero from "../components/Hero";
 import { SiteHeader, SiteFooter } from "../components/Chrome";
 import { useScrollReveal, SplitChars } from "../hooks/animations";
-import { useClipPortal, useExpandPanel, useRevealWords, useScrollTheme } from "../hooks/zentry";
+import { useClipPortal, useExpandPanel, useRevealWords, useScrollTheme } from "../hooks/motion";
 import { usePageReveals } from "../hooks/animations";
 import { navigate } from "../lib/router";
 import { PLANS } from "../data/plans";
