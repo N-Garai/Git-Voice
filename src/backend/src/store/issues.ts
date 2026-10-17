@@ -1,14 +1,18 @@
 /**
  * Issue record persistence.
  *
- * Primary store is in-process (fast, always available). Two optional upgrades:
- *  - DATA_DIR set  → JSON snapshot (survives restarts where the disk persists)
- *                    and audio files written to disk instead of memory.
- *  - DATABASE_URL set → record metadata mirrored into Postgres.
- * Audio is capped: only the most recent N reports keep their audio attached.
+ * Three layers, each optional and independent:
+ *  - memory      always on; the source of truth while the process is alive.
+ *  - Postgres    when DATABASE_URL is set: the whole record (minus audio) is
+ *                mirrored so reports survive restarts and free-tier sleeps.
+ *  - DATA_DIR    when set: an additional JSON snapshot plus audio files on disk.
+ *
+ * Audio is deliberately never written to Postgres — it is large and binary.
+ * Only the most recent N reports keep their audio attached.
  */
 import fs from "node:fs";
 import path from "node:path";
+import pg from "pg";
 import { config } from "../config.js";
 import type { IssueRecord, StepTrace } from "../types.js";
 
@@ -26,8 +30,18 @@ export class IssueStore {
   private dirty = false;
   private snapshotPath: string | null;
   private audioDir: string | null;
+  private pool: pg.Pool | null = null;
+  private hydrated = false;
 
   constructor() {
+    if (config.databaseUrl) {
+      try {
+        this.pool = new pg.Pool({ connectionString: config.databaseUrl, max: 3 });
+      } catch {
+        this.pool = null;
+      }
+    }
+
     if (config.dataDir) {
       try {
         fs.mkdirSync(config.dataDir, { recursive: true });
@@ -44,6 +58,93 @@ export class IssueStore {
       this.snapshotPath = null;
       this.audioDir = null;
     }
+  }
+
+  /**
+   * Restore records from Postgres at boot. Without this every free-tier sleep
+   * or deploy would silently empty the dashboard, which is exactly the bug this
+   * layer exists to prevent. Records are re-keyed by project so tenant scoping
+   * keeps working against restored data.
+   */
+  async hydrate(): Promise<void> {
+    if (this.hydrated || !this.pool) return;
+    this.hydrated = true;
+    try {
+      const res = await this.pool.query(
+        `SELECT id, project_id, status, created_at, completed_at, error, transcript,
+                transcript_source, audio_mime, telemetry, trace, result
+         FROM git_voice_issues ORDER BY created_at DESC`
+      );
+      for (const r of res.rows as Array<Record<string, unknown>>) {
+        const id = r.id as string;
+        if (this.issues.has(id)) continue;
+        const record: IssueRecord = {
+          id,
+          projectId: r.project_id as string,
+          status: (r.status as IssueRecord["status"]) ?? "completed",
+          createdAt: (r.created_at as Date).toISOString(),
+          completedAt: r.completed_at ? (r.completed_at as Date).toISOString() : undefined,
+          error: (r.error as string) ?? undefined,
+          transcript: (r.transcript as string) ?? undefined,
+          transcriptSource: (r.transcript_source as IssueRecord["transcriptSource"]) ?? undefined,
+          audioMime: (r.audio_mime as string) ?? undefined,
+          telemetry: (r.telemetry as IssueRecord["telemetry"]) ?? {
+            url: "", route: "", viewport: { w: 0, h: 0 }, userAgent: "", consoleLogs: [], errors: [], clicks: []
+          },
+          trace: (r.trace as StepTrace[]) ?? [],
+          result: (r.result as IssueRecord["result"]) ?? undefined
+        };
+        this.issues.set(id, record);
+        this.order.push(id);
+      }
+      if (this.order.length) {
+        console.log(`[store] Restored ${this.order.length} issue record(s) from Postgres`);
+      }
+    } catch (err) {
+      // A missing table is normal before the schema runs; never block boot.
+      console.warn("[store] Issue hydrate skipped:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** Mirror one record to Postgres. Never throws — memory stays authoritative. */
+  private persist(record: IssueRecord): void {
+    if (!this.pool) return;
+    const { audioBase64, ...rest } = record;
+    void audioBase64;
+    void this.pool
+      .query(
+        `INSERT INTO git_voice_issues
+           (id, project_id, status, created_at, completed_at, error, transcript,
+            transcript_source, audio_mime, telemetry, trace, result)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT (id) DO UPDATE SET
+           status = EXCLUDED.status, completed_at = EXCLUDED.completed_at,
+           error = EXCLUDED.error, transcript = EXCLUDED.transcript,
+           transcript_source = EXCLUDED.transcript_source,
+           audio_mime = EXCLUDED.audio_mime, telemetry = EXCLUDED.telemetry,
+           trace = EXCLUDED.trace, result = EXCLUDED.result`,
+        [
+          rest.id, rest.projectId, rest.status, new Date(rest.createdAt),
+          rest.completedAt ? new Date(rest.completedAt) : null,
+          rest.error ?? null, rest.transcript ?? null, rest.transcriptSource ?? null,
+          rest.audioMime ?? null,
+          JSON.stringify(rest.telemetry ?? {}),
+          JSON.stringify(rest.trace ?? []),
+          rest.result ? JSON.stringify(rest.result) : null
+        ]
+      )
+      .catch(() => {
+        // Database hiccup: the in-memory record is still served correctly.
+      });
+  }
+
+  private deletePersisted(id: string): void {
+    if (!this.pool) return;
+    void this.pool
+      .query(`DELETE FROM git_voice_issues WHERE id = $1`, [id])
+      .catch(() => {
+        /* best effort */
+      });
   }
 
   private loadSnapshot(): void {
@@ -87,6 +188,7 @@ export class IssueStore {
   create(record: IssueRecord): void {
     this.issues.set(record.id, record);
     this.order.unshift(record.id);
+    this.persist(record);
     this.trim();
     this.scheduleSnapshot();
   }
@@ -112,7 +214,10 @@ export class IssueStore {
         /* best effort */
       }
     }
-    if (existed) this.scheduleSnapshot();
+    if (existed) {
+      this.deletePersisted(id);
+      this.scheduleSnapshot();
+    }
     return existed;
   }
 
@@ -128,6 +233,7 @@ export class IssueStore {
     if (!existing) return undefined;
     const updated = { ...existing, ...patch };
     this.issues.set(id, updated);
+    this.persist(updated);
     this.scheduleSnapshot();
     return updated;
   }
@@ -140,6 +246,14 @@ export class IssueStore {
     if (idx >= 0) trace[idx] = entry;
     else trace.push(entry);
     existing.trace = trace;
+    // Persist at the end of the run, not on every station tick.
+    if (entry.status === "completed" || entry.status === "failed" || entry.status === "skipped") {
+      this.persist(existing);
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.pool?.end().catch(() => {});
   }
 
   attachAudio(id: string, base64: string, mime: string): void {

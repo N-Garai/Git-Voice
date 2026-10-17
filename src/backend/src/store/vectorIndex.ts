@@ -273,6 +273,27 @@ CREATE TABLE IF NOT EXISTS git_voice_sessions (
   expires_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_gv_sessions_login ON git_voice_sessions (github_login);
+
+-- Report records. Without this the dashboard empties on every free-tier sleep
+-- or deploy, because records would otherwise live only in process memory.
+-- Audio is intentionally not stored here (large, binary); it stays in memory
+-- or on disk under DATA_DIR.
+CREATE TABLE IF NOT EXISTS git_voice_issues (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'completed',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  error TEXT,
+  transcript TEXT,
+  transcript_source TEXT,
+  audio_mime TEXT,
+  telemetry JSONB NOT NULL DEFAULT '{}'::jsonb,
+  trace JSONB NOT NULL DEFAULT '[]'::jsonb,
+  result JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_gv_issues_project ON git_voice_issues (project_id);
+CREATE INDEX IF NOT EXISTS idx_gv_issues_created ON git_voice_issues (created_at DESC);
 `;
 
 /**
