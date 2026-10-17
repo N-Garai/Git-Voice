@@ -50,7 +50,13 @@ export interface IssueRecordDto {
     consoleCorrelations: string[];
     transcriptSource: string;
     models: { transcriber: string; drafter: string; embeddings: string; vectorStore: string };
-    confirmation: { spokenText: string; voiceBackend: string };
+    confirmation: {
+      spokenText: string;
+      voiceBackend: string;
+      /** Present when the server rendered speech with the hosted voice. */
+      audioBase64?: string;
+      audioMime?: string;
+    };
     github: { pushed: boolean; issueUrl?: string; issueNumber?: number; repository?: string; reason?: string };
   };
 }

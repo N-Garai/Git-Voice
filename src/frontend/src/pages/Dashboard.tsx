@@ -307,8 +307,28 @@ function IssueCard({
 
 /* --------------------------------------------------------- report composer */
 
-/** Speak the confirmation out loud, falling back silently when unsupported. */
-function speak(text: string): void {
+/**
+ * Speak the confirmation. Prefers the server-rendered audio so the app has one
+ * consistent voice; falls back to the browser's speech synthesis when no hosted
+ * key is configured or the audio is unavailable.
+ */
+function speak(
+  text: string,
+  audio?: { audioBase64?: string; audioMime?: string }
+): void {
+  if (audio?.audioBase64) {
+    try {
+      const el = new Audio(`data:${audio.audioMime ?? "audio/mpeg"};base64,${audio.audioBase64}`);
+      void el.play().catch(() => speakLocally(text));
+      return;
+    } catch {
+      // fall through to the browser voice
+    }
+  }
+  speakLocally(text);
+}
+
+function speakLocally(text: string): void {
   if (!("speechSynthesis" in window) || !text) return;
   try {
     const u = new SpeechSynthesisUtterance(text);
@@ -606,7 +626,7 @@ function ProjectsView(): JSX.Element {
 
   const submitReport = async (projectId: string, repoOverride: string, text: string, audio?: Blob) => {
     setBusy(projectId);
-    setMessage("");
+    setMessage("Analyzing the report…");
     try {
       const telemetry = {
         url: window.location.href,
@@ -643,8 +663,8 @@ function ProjectsView(): JSX.Element {
         });
       }
 
-      const spoken = created.issue.result?.confirmation.spokenText;
-      if (spoken) speak(spoken);
+      const spoken = created.issue.result?.confirmation;
+      if (spoken?.spokenText) speak(spoken.spokenText, spoken);
       setMessage(
         created.issue.result?.github.issueUrl
           ? `Report filed — ${created.issue.result.github.issueUrl}`
@@ -664,9 +684,13 @@ function ProjectsView(): JSX.Element {
 
   const confirmCompose = async (text: string, audio?: Blob) => {
     if (!composer) return;
-    const repoEl = document.getElementById(`repo-override-${composer.projectId}`) as HTMLInputElement | null;
-    await submitReport(composer.projectId, repoEl?.value ?? "", text, audio);
+    const projectId = composer.projectId;
+    const repoEl = document.getElementById(`repo-override-${projectId}`) as HTMLInputElement | null;
+    const repoOverride = repoEl?.value ?? "";
+    // Close immediately: the pipeline takes several seconds and the composer
+    // should not sit there frozen while it runs.
     setComposer(null);
+    await submitReport(projectId, repoOverride, text, audio);
   };
 
   if (!projects) return <div className="empty"><span className="loading-dots"><i /><i /><i /></span></div>;

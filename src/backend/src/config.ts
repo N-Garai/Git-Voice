@@ -44,7 +44,7 @@ export const config = {
 
   elevenlabs: {
     apiKey: str("ELEVENLABS_API_KEY"),
-    voiceId: str("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb"),
+    voiceId: str("ELEVENLABS_VOICE_ID", "Dslrhjl3ZpzrctukrQSN"),
     modelId: str("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
   },
 

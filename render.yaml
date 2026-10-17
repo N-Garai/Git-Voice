@@ -28,7 +28,7 @@ services:
       - key: ELEVENLABS_API_KEY
         sync: false
       - key: ELEVENLABS_VOICE_ID
-        value: JBFqnCBsd6RMkjVDRZzb
+        value: Dslrhjl3ZpzrctukrQSN
       - key: GITHUB_TOKEN
         sync: false
       - key: GITHUB_DEFAULT_REPO
