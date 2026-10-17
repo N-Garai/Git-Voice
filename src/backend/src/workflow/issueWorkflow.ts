@@ -68,6 +68,12 @@ export interface PipelineSubmit {
 export interface PipelineOptions {
   /** When `allowed` is false, hosted calls are skipped for the offline engine. */
   hostedQuota?: { allowed: boolean; reason?: string };
+  /**
+   * Explicit destination for this report, as `owner/repo`. Lets the dashboard
+   * file a one-off issue to a different repository than the project's default
+   * (e.g. a one-off triage of a bug that actually belongs elsewhere).
+   */
+  repoFullNameOverride?: string;
 }
 
 const STEP_NAMES: Record<string, string> = {
@@ -375,7 +381,7 @@ export async function runIssuePipeline(
           ? await sessionStore.tokenForLogin(project.ownerLogin)
           : undefined;
         const github = await createGitHubIssue({
-          repoFullName: project?.repoFullName,
+          repoFullName: options.repoFullNameOverride ?? project?.repoFullName,
           ownerToken,
           title: draft.title,
           body: draft.issueBody,

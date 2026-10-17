@@ -145,6 +145,27 @@ Runs a hybrid query against the project's index (useful for demos and debugging)
 { "query": "coupon checkout", "backend": "…", "matches": [ { "filePath": "…", "score": 0.91 } ] }
 ```
 
+### `DELETE /api/projects/:id`  *(operator or that project's owner)*
+
+Permanently removes the project and everything belonging to it, in dependency
+order:
+
+1. its index rows and embeddings (deleted from Postgres when configured),
+2. every stored report for that project plus any attached audio,
+3. the project row itself (memory and Postgres).
+
+Returns `{ ok: true, deleted: { project, reports, indexEntriesRemoved } }`.
+`400` for the bundled demo project, which is re-seeded on boot. Issues already
+filed on GitHub are unaffected — this only clears Git-Voice's own data.
+
+### `POST /api/issue` — choosing the destination repo
+
+By default an issue goes to the project's own `repoFullName`. Pass an optional
+`repoFullName` (JSON body or a multipart form field) to retarget **that single
+report** to another `owner/repo` without changing the project default. The
+report is still published with the project owner's own token, so the GitHub
+author is unchanged; a repo they cannot write to simply degrades to a draft.
+
 ## Settings
 
 ### `GET /api/settings`

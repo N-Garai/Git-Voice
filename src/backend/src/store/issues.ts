@@ -100,6 +100,29 @@ export class IssueStore {
     return projectId ? all.filter((r) => r.projectId === projectId) : all;
   }
 
+  /** Delete one record (and its audio file). Returns true when it existed. */
+  remove(id: string): boolean {
+    const existed = this.issues.delete(id);
+    const at = this.order.indexOf(id);
+    if (at !== -1) this.order.splice(at, 1);
+    if (this.audioDir) {
+      try {
+        fs.rmSync(path.join(this.audioDir, `${id}.bin`), { force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+    if (existed) this.scheduleSnapshot();
+    return existed;
+  }
+
+  /** Delete every record belonging to a project. Returns how many were removed. */
+  removeProject(projectId: string): number {
+    const ids = this.order.filter((id) => this.issues.get(id)?.projectId === projectId);
+    for (const id of ids) this.remove(id);
+    return ids.length;
+  }
+
   update(id: string, patch: Partial<IssueRecord>): IssueRecord | undefined {
     const existing = this.issues.get(id);
     if (!existing) return undefined;

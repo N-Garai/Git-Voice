@@ -213,11 +213,12 @@ const submittingCaller = await caller(c);
 
     const quota = claimHostedQuota("authenticated");
 
-    let projectId = "";
+let projectId = "";
     let transcript = "";
     let transcriptSource: "browser-speech" | "typed-report" | "telemetry-only" = "browser-speech";
     let telemetryRaw: unknown = {};
     let audio: { base64: string; mime: string } | undefined;
+    let requestedRepo = "";
 
     const contentType = c.req.header("content-type") ?? "";
 
@@ -230,8 +231,9 @@ const submittingCaller = await caller(c);
         if (sourceField === "typed-report" || sourceField === "telemetry-only" || sourceField === "browser-speech") {
           transcriptSource = sourceField;
         }
-        const telemetryField = form.get("telemetry");
+const telemetryField = form.get("telemetry");
         telemetryRaw = telemetryField ? JSON.parse(String(telemetryField)) : {};
+        requestedRepo = String(form.get("repoFullName") ?? "");
         const file = form.get("audio");
         if (file instanceof File && file.size > 0 && file.size <= config.limits.maxAudioBytes) {
           audio = {
@@ -248,6 +250,7 @@ const submittingCaller = await caller(c);
           transcriptSource = sourceField;
         }
         telemetryRaw = body.telemetry ?? {};
+        requestedRepo = typeof body.repoFullName === "string" ? body.repoFullName.trim() : "";
       }
     } catch {
       return c.json({ error: "Malformed request body" }, 400);
@@ -275,6 +278,19 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
       return c.json({ error: "A report needs a transcript, audio, or captured telemetry" }, 400);
     }
 
+// Optional one-off destination: the developer can retarget this single report
+    // to any repo they can access, without changing the project default.
+    let repoOverride: string | undefined;
+    const rawOverride = requestedRepo || targetProject.repoFullName;
+    if (rawOverride) {
+      try {
+        const parsed = parseRepo(rawOverride);
+        repoOverride = `${parsed.owner}/${parsed.repo}`;
+      } catch {
+        return c.json({ error: "repoFullName must look like owner/repo" }, 400);
+      }
+    }
+
     const record = await runIssuePipeline(
       {
         projectId,
@@ -284,7 +300,7 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
         transcriptSource
       },
       index,
-      { hostedQuota: quota }
+      { hostedQuota: quota, repoFullNameOverride: repoOverride }
     );
 
     if (!record) return c.json({ error: "Pipeline failed before producing a record" }, 500);
@@ -393,6 +409,28 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
       await projectStore.upsert(failed);
       return c.json({ error: `Indexing failed: ${message}` }, 502);
     }
+  });
+
+  app.delete("/api/projects/:id", async (c) => {
+    const id = c.req.param("id");
+    const project = projectStore.get(id);
+    const who = await allowWriteProject(c, project);
+    if (!who) return c.json(UNAUTHORIZED, 401);
+    if (!project) return c.json({ error: "Project not found" }, 404);
+
+    // The bundled demo is part of the landing experience and is re-seeded on
+    // boot, so it is never deletable.
+    if (id === DEMO_PROJECT_ID) {
+      return c.json({ error: "The bundled demo project cannot be deleted" }, 400);
+    }
+
+    // Purge in dependency order: index rows (incl. embeddings in Postgres),
+    // stored reports + their audio, then the project row itself.
+    await index.removeProject(id);
+    const reports = issueStore.removeProject(id);
+    const removed = await projectStore.remove(id);
+
+    return c.json({ ok: true, deleted: { project: removed, reports, indexEntriesRemoved: true } });
   });
 
   app.get("/api/projects/:id/search", async (c) => {

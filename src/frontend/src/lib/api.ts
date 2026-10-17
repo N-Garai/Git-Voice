@@ -140,6 +140,13 @@ export async function fetchBlob(path: string): Promise<Blob> {
   return res.blob();
 }
 
+async function del<T>(path: string): Promise<T> {
+  const res = await fetch(`${base}${path}`, { method: "DELETE", headers: authHeaders() });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `Request failed (${res.status})`, res.status);
+  return data as T;
+}
+
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   issues: (projectId?: string) =>
@@ -153,6 +160,16 @@ export const api = {
       `/api/projects/${id}/index`,
       repoFullName ? { repoFullName } : {}
     ),
+  /** Removes the project, its reports/audio, and its index rows (incl. Postgres). */
+  deleteProject: (id: string) =>
+    del<{ ok: boolean; deleted: { project: boolean; reports: number } }>(`/api/projects/${id}`),
+  /** File a report from the dashboard, optionally targeting a specific repo. */
+  submitReport: (payload: {
+    projectId: string;
+    transcript: string;
+    telemetry: unknown;
+    repoFullName?: string;
+  }) => post<{ issue: IssueRecordDto }>("/api/issue", payload),
   search: (projectId: string, q: string) =>
     get<{ matches: Array<{ filePath: string; componentName: string; score: number }> }>(
       `/api/projects/${projectId}/search?q=${encodeURIComponent(q)}`

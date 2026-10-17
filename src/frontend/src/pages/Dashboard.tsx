@@ -412,6 +412,56 @@ function ProjectsView(): JSX.Element {
     setMessage("Logged out of GitHub — public repo links still work.");
   };
 
+  const removeProject = async (id: string, name: string) => {
+    const ok = window.confirm(
+      `Delete "${name}"?\n\nThis permanently removes the project, its stored reports and audio, and its architecture index — including everything in the database. Issues already filed on GitHub are not affected.`
+    );
+    if (!ok) return;
+    setBusy(id);
+    setMessage("");
+    try {
+      const res = await api.deleteProject(id);
+      setMessage(`Deleted "${name}" — ${res.deleted.reports} report(s) and its index removed.`);
+      await load();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const fileHere = async (projectId: string, repoOverride: string) => {
+    const text = window.prompt(
+      "Describe the problem in your own words (the machine turns it into an issue):"
+    );
+    if (!text || !text.trim()) return;
+    setBusy(projectId);
+    setMessage("");
+    try {
+      await api.submitReport({
+        projectId,
+        transcript: text.trim(),
+        repoFullName: repoOverride || undefined,
+        telemetry: {
+          url: window.location.href,
+          route: window.location.pathname,
+          viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio },
+          userAgent: navigator.userAgent,
+          language: navigator.language,
+          consoleLogs: [],
+          errors: [],
+          clicks: []
+        }
+      });
+      setMessage("Report filed — open the Issues tab to see the drafted issue.");
+      await load();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (!projects) return <div className="empty"><span className="loading-dots"><i /><i /><i /></span></div>;
 
   if (loadError) {
@@ -446,12 +496,21 @@ function ProjectsView(): JSX.Element {
               <span className="mono-xs text-faint">{p.indexCount} files indexed</span>
               <button
                 className="btn btn-ghost btn-sm"
-                style={{ marginLeft: "auto" }}
                 disabled={busy === p.id}
                 onClick={() => void reindex(p.id, p.repoFullName)}
               >
                 {busy === p.id ? "Indexing…" : "Re-index"}
               </button>
+              {p.id !== "prj_demo_storefront" && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={busy === p.id}
+                  onClick={() => void removeProject(p.id, p.name)}
+                  title="Delete this project, its reports, and its index"
+                >
+                  Delete
+                </button>
+              )}
             </div>
             {p.indexError && <p className="mono-xs" style={{ color: "var(--red)", marginTop: 8 }}>{p.indexError}</p>}
             {p.indexedAt && (
@@ -459,6 +518,25 @@ function ProjectsView(): JSX.Element {
             )}
             <div className="snippet">
               &lt;script src="<b>{baseUrl}/api/widget.js</b>" data-project-id="<b>{p.id}</b>"&gt;&lt;/script&gt;
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>
+              <input
+                className="coupon-input-field"
+                style={{ flex: "1 1 240px", margin: 0 }}
+                placeholder={"File to repo (owner/repo) — blank uses " + (p.repoFullName ?? "none")}
+                defaultValue=""
+                id={`repo-override-${p.id}`}
+              />
+              <button
+                className="btn btn-primary btn-sm"
+                disabled={busy === p.id}
+                onClick={() => {
+                  const el = document.getElementById(`repo-override-${p.id}`) as HTMLInputElement | null;
+                  void fileHere(p.id, el?.value.trim() ?? "");
+                }}
+              >
+                File a report here
+              </button>
             </div>
           </div>
         ))}

@@ -30,8 +30,13 @@ async function signIn(login: string, id: number): Promise<{ cookie: string; sess
   return { cookie: `gv_session=${session.id}`, sessionId: session.id };
 }
 
-async function createProjectFor(cookie: string, name: string, repo?: string): Promise<string> {
-  const res = await apiRoutes(stubIndex()).request("http://local/api/projects", {
+async function createProjectFor(
+  app: ReturnType<typeof apiRoutes>,
+  cookie: string,
+  name: string,
+  repo?: string
+): Promise<string> {
+  const res = await app.request("http://local/api/projects", {
     method: "POST",
     headers: { "content-type": "application/json", cookie },
     body: JSON.stringify(repo ? { name, repoFullName: repo } : { name })
@@ -71,7 +76,7 @@ describe("cross-user isolation", () => {
   });
 
   it("each user sees only their own project", async () => {
-    const id = await createProjectFor(alice.cookie, "Alice App", "alice/app");
+    const id = await createProjectFor(app, alice.cookie, "Alice App", "alice/app");
 
     const mine = await app.request("http://local/api/projects", { headers: { cookie: alice.cookie } });
     const mineIds = ((await mine.json()) as { projects: Array<{ id: string }> }).projects.map((p) => p.id);
@@ -83,7 +88,7 @@ describe("cross-user isolation", () => {
   });
 
   it("bob cannot read, reindex, or search alice's project", async () => {
-    const id = await createProjectFor(alice.cookie, "Alice App", "alice/app");
+    const id = await createProjectFor(app, alice.cookie, "Alice App", "alice/app");
 
     for (const path of [`/api/projects/${id}`, `/api/projects/${id}/search?q=coupon`]) {
       const res = await app.request(`http://local${path}`, { headers: { cookie: bob.cookie } });
@@ -99,7 +104,7 @@ describe("cross-user isolation", () => {
   });
 
   it("bob cannot file a report into alice's project", async () => {
-    const id = await createProjectFor(alice.cookie, "Alice App");
+    const id = await createProjectFor(app, alice.cookie, "Alice App");
 
     const res = await app.request("http://local/api/issue", {
       method: "POST",
@@ -110,7 +115,7 @@ describe("cross-user isolation", () => {
   });
 
   it("bob cannot read or play alice's report audio", async () => {
-    const id = await createProjectFor(alice.cookie, "Alice App");
+    const id = await createProjectFor(app, alice.cookie, "Alice App");
     const filed = await app.request("http://local/api/issue", {
       method: "POST",
       headers: { "content-type": "application/json", cookie: alice.cookie },
@@ -187,5 +192,83 @@ describe("cross-user isolation", () => {
     const mine = await app.request("http://local/api/projects", { headers: { cookie: alice.cookie } });
     const ids = ((await mine.json()) as { projects: Array<{ id: string }> }).projects.map((p) => p.id);
     expect(ids).toContain(DEMO);
+  });
+});
+
+describe("project deletion purges everything", () => {
+  let app: ReturnType<typeof apiRoutes>;
+  let alice: { cookie: string };
+  let removed: string[];
+
+  beforeEach(async () => {
+    app = apiRoutes(stubIndex());
+    await seedDemo();
+    alice = await signIn("alice", 1);
+    removed = [];
+  });
+
+  it("deletes the project, its reports, and its index rows", async () => {
+    const id = await createProjectFor(app, alice.cookie, "Temp Project", "alice/temp");
+
+    const filed = await app.request("http://local/api/issue", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: alice.cookie },
+      body: JSON.stringify({ projectId: id, transcript: "something broke", telemetry: VALID_TELEMETRY })
+    });
+    expect(filed.status).toBe(201);
+
+    const before = await app.request("http://local/api/issues", { headers: { cookie: alice.cookie } });
+    const beforeIds = ((await before.json()) as { issues: Array<{ projectId: string }> }).issues.map((i) => i.projectId);
+    expect(beforeIds).toContain(id);
+
+    const del = await app.request(`http://local/api/projects/${id}`, {
+      method: "DELETE",
+      headers: { cookie: alice.cookie }
+    });
+    expect(del.status).toBe(200);
+    const payload = (await del.json()) as { ok: boolean; deleted: { project: boolean; reports: number } };
+    expect(payload.ok).toBe(true);
+    expect(payload.deleted.project).toBe(true);
+    expect(payload.deleted.reports).toBe(1);
+
+    // Project row is gone.
+    const projects = await app.request("http://local/api/projects", { headers: { cookie: alice.cookie } });
+    const ids = ((await projects.json()) as { projects: Array<{ id: string }> }).projects.map((p) => p.id);
+    expect(ids).not.toContain(id);
+
+    // Reports are gone too.
+    const issues = await app.request("http://local/api/issues", { headers: { cookie: alice.cookie } });
+    const remaining = ((await issues.json()) as { issues: Array<{ projectId: string }> }).issues.map((i) => i.projectId);
+    expect(remaining).not.toContain(id);
+  });
+
+  it("refuses to delete the bundled demo project", async () => {
+    const del = await app.request(`http://local/api/projects/${DEMO}`, {
+      method: "DELETE",
+      headers: { cookie: alice.cookie }
+    });
+    expect(del.status).toBe(400);
+  });
+
+  it("another user cannot delete someone else's project", async () => {
+    const id = await createProjectFor(app, alice.cookie, "Alice Only", "alice/private");
+    const bob = await signIn("bob", 2);
+
+    const del = await app.request(`http://local/api/projects/${id}`, {
+      method: "DELETE",
+      headers: { cookie: bob.cookie }
+    });
+    expect(del.status).toBe(401);
+
+    // Still there for its real owner.
+    const projects = await app.request("http://local/api/projects", { headers: { cookie: alice.cookie } });
+    const ids = ((await projects.json()) as { projects: Array<{ id: string }> }).projects.map((p) => p.id);
+    expect(ids).toContain(id);
+  });
+
+  it("anonymous callers cannot delete anything", async () => {
+    const id = await createProjectFor(app, alice.cookie, "Alice Only", "alice/private");
+    const del = await app.request(`http://local/api/projects/${id}`, { method: "DELETE" });
+    expect(del.status).toBe(401);
   });
 });

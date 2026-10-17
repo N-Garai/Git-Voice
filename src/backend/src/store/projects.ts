@@ -80,9 +80,25 @@ export class ProjectStore {
     }
   }
 
-  async close(): Promise<void> {
-    await this.pool?.end().catch(() => {});
+/**
+ * Forget a project entirely — memory and Postgres. Callers must also drop the
+ * project's index rows (see VectorIndex.removeProject), because those live in
+ * the vector store rather than here.
+ */
+async remove(id: string): Promise<boolean> {
+  const existed = this.projects.delete(id);
+  if (!this.pool) return existed;
+  try {
+    await this.pool.query(`DELETE FROM git_voice_projects WHERE id = $1`, [id]);
+  } catch {
+    // Memory is the source of truth; the mirror self-heals on next hydrate.
   }
+  return existed;
+}
+
+async close(): Promise<void> {
+  await this.pool?.end().catch(() => {});
+}
 }
 
 export const projectStore = new ProjectStore();
