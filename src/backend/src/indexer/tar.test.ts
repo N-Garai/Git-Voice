@@ -36,6 +36,43 @@ function buildTar(files: Array<{ path: string; content: string }>): Buffer {
   return Buffer.concat(chunks);
 }
 
+/** Header with an arbitrary typeflag — used for pax global/extended headers. */
+function buildTypedHeader(
+  name: string,
+  typeflag: string,
+  size: number,
+  content: Buffer
+): { header: Buffer; data: Buffer } {
+  const header = Buffer.alloc(512);
+  header.write(name.slice(0, 99), 0, "utf8");
+  header.write(size.toString(8).padStart(11, "0"), 124, "ascii");
+  header.write("0000644\0" + "0000000\0" + "0000000\0", 100, "ascii");
+  header.write(typeflag, 156, "ascii");
+  header.write("        ", 148, "ascii");
+  let checksum = 0;
+  for (const byte of header) checksum += byte;
+  header.write(checksum.toString(8).padStart(6, "0") + "\0 ", 148, "ascii");
+  header.write("ustar\0" + "00", 257, "ascii");
+  const pad = (512 - (content.length % 512)) % 512;
+  return { header, data: Buffer.concat([content, Buffer.alloc(pad)]) };
+}
+
+/**
+ * codeload.tar.gz prefixes every archive with a `pax_global_header` whose
+ * payload is 52 bytes — not a whole number of 512-byte blocks. Regression guard:
+ * mis-advancing past that block desynchronises every subsequent entry, which
+ * silently produced empty paths and garbage content.
+ */
+function buildTarballWithPaxGlobal(files: Array<{ path: string; content: string }>): Buffer {
+  const pax = buildTypedHeader(
+    "pax_global_header",
+    "g",
+    52,
+    Buffer.from("52 mtime=1757576295.532175\n30 comment=2d49746572", "utf8")
+  );
+  return Buffer.concat([pax.header, pax.data, buildTar(files)]);
+}
+
 describe("readTar", () => {
   it("reads regular files with contents", () => {
     const tar = buildTar([
@@ -61,6 +98,35 @@ describe("readTar", () => {
     const tar = buildTar([{ path: "f", content: "hello world" }]).slice(0, 600);
     const entries = readTar(tar);
     expect(entries.length).toBeLessThanOrEqual(1);
+  });
+
+  it("skips a pax_global_header and still reads every real entry", () => {
+    const tar = buildTarballWithPaxGlobal([
+      { path: "flappy-bird-main/README.md", content: "# Flappy Bird" },
+      { path: "flappy-bird-main/script.js", content: "const sounds = {};\nfunction flap() {}\n" },
+      { path: "flappy-bird-main/styles.css", content: "body { margin: 0 }" }
+    ]);
+    const files = readTar(tar).filter((e) => e.type === "file");
+
+    expect(files).toHaveLength(3);
+    expect(files.map((f) => f.path)).toEqual([
+      "flappy-bird-main/README.md",
+      "flappy-bird-main/script.js",
+      "flappy-bird-main/styles.css"
+    ]);
+    // Content integrity — the real symptom of the offset bug was garbage text.
+    expect(files[0].content?.toString()).toBe("# Flappy Bird");
+    expect(files[1].content?.toString()).toContain("function flap()");
+    expect(files[2].content?.toString()).toBe("body { margin: 0 }");
+  });
+
+  it("still strips the wrapper folder after a pax global header", () => {
+    const tar = buildTarballWithPaxGlobal([
+      { path: "flappy-bird-main/index.html", content: "<h1>hi</h1>" },
+      { path: "flappy-bird-main/script.js", content: "const a = 1;" }
+    ]);
+    const stripped = stripCommonPrefix(readTar(tar)).filter((e) => e.type === "file");
+    expect(stripped.map((e) => e.path)).toEqual(["index.html", "script.js"]);
   });
 });
 

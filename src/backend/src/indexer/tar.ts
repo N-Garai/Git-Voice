@@ -81,8 +81,10 @@ export function readTar(buf: Buffer): TarEntry[] {
     }
 
     if (typeflag === "x" || typeflag === "g") {
-      // pax extended header — the following entry carries the real metadata.
-      offset = dataEnd + Math.ceil(size / BLOCK) * BLOCK;
+      // pax extended header (`x` per-entry, `g` global). codeload.tar.gz emits a
+      // `pax_global_header` first; its payload is metadata only, so the next
+      // real header simply follows the padded data block.
+      offset = dataStart + Math.ceil(size / BLOCK) * BLOCK;
       continue;
     }
 
