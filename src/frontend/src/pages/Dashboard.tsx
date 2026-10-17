@@ -1,6 +1,17 @@
 /** Developer dashboard: issue log, projects + indexing, integration settings. */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type IssueRecordDto, type ProjectDto, type IntegrationDto, type GitHubUser, type RepoListing } from "../lib/api";
+import {
+  api,
+  fetchBlob,
+  ApiError,
+  getToken,
+  setToken as setTokenValue,
+  type IssueRecordDto,
+  type ProjectDto,
+  type IntegrationDto,
+  type GitHubUser,
+  type RepoListing
+} from "../lib/api";
 import { useRoute, navigate } from "../lib/router";
 import { GearLogo } from "../components/Chrome";
 import { useScrollReveal } from "../hooks/animations";
@@ -67,6 +78,12 @@ function IssuesView(): JSX.Element {
       const data = await api.issues();
       setIssues(data.issues);
     } catch (err) {
+      // A 401 here means the token/key went stale — surface the unlock screen
+      // rather than an empty issue log.
+      if (err instanceof ApiError && err.status === 401) {
+        setError("locked");
+        return;
+      }
       setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
@@ -77,6 +94,15 @@ function IssuesView(): JSX.Element {
     return () => clearInterval(t);
   }, [load]);
 
+  if (error === "locked") {
+    return (
+      <div className="empty">
+        <div className="big">🔒</div>
+        <p>This dashboard needs the operator token or a GitHub sign-in.</p>
+        <button className="btn btn-primary mt-16" onClick={() => window.location.reload()}>Unlock</button>
+      </div>
+    );
+  }
   if (error) return <div className="empty"><div className="big">⚠</div>{error}</div>;
   if (!issues) return <div className="empty"><span className="loading-dots"><i /><i /><i /></span></div>;
 
@@ -122,9 +148,29 @@ function IssueCard({
   const r = issue.result;
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const reveal = useScrollReveal<HTMLDivElement>();
 
   const hasAudio = issue.audioMime !== undefined;
+
+  // Audio is a protected endpoint (Bearer token required), so it is fetched
+  // with the token and played from an object URL rather than a plain <audio src>.
+  useEffect(() => {
+    if (!hasAudio) return;
+    let revoked: string | null = null;
+    let cancelled = false;
+    void fetchBlob(api.issueAudioUrl(issue.id))
+      .then((blob) => {
+        if (cancelled) return;
+        revoked = URL.createObjectURL(blob);
+        setAudioUrl(revoked);
+      })
+      .catch(() => setAudioUrl(null));
+    return () => {
+      cancelled = true;
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [hasAudio, issue.id]);
 
   const playAudio = () => {
     const el = audioRef.current;
@@ -169,14 +215,20 @@ function IssueCard({
       <div className="actions">
         {hasAudio && (
           <>
-            <audio ref={audioRef} src={`/api/issues/${issue.id}/audio`} preload="none" />
-            <button className={`audio-btn${playing ? " playing" : ""}`} onClick={playAudio}>
+            {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" />}
+            <button
+              className={`audio-btn${playing ? " playing" : ""}`}
+              onClick={playAudio}
+              disabled={!audioUrl}
+            >
               {playing ? (
                 <span className="eq"><i /><i /><i /><i /></span>
               ) : (
                 "▶"
               )}
-              {playing ? "Playing client's voice" : "Listen to the client"}
+              {audioUrl
+                ? playing ? "Playing client's voice" : "Listen to the client"
+                : "Loading audio…"}
             </button>
           </>
         )}
@@ -185,12 +237,21 @@ function IssueCard({
             View on GitHub ↗
           </a>
         ) : r?.github.reason ? (
-          <span className="mono-xs text-faint" title={r.github.reason}>draft (publishing off)</span>
+          <span className="mono-xs text-faint" title={r.github.reason}>draft — {r.github.reason}</span>
         ) : null}
         {r && (
-          <a className="gh-link" href={`/api/issues/${issue.id}/body.md`} target="_blank" rel="noopener">
+          <button
+            className="gh-link"
+            style={{ background: "none", border: "none", cursor: "pointer", padding: 0, font: "inherit" }}
+            onClick={() => {
+              void fetchBlob(`/api/issues/${issue.id}/body.md`)
+                .then((blob) => blob.text())
+                .then((text) => window.open(URL.createObjectURL(new Blob([text], { type: "text/markdown" })), "_blank"))
+                .catch(() => undefined);
+            }}
+          >
             Raw markdown
-          </a>
+          </button>
         )}
       </div>
 
@@ -250,20 +311,29 @@ function ProjectsView(): JSX.Element {
   const [projects, setProjects] = useState<ProjectDto[] | null>(null);
   const [name, setName] = useState("");
   const [repo, setRepo] = useState("");
-  const [token, setToken] = useState(localStorage.getItem("gv_token") ?? "");
+  // Operator key: optional. The api client attaches it to every dashboard
+  // call automatically, so this input only needs to write it once.
+  const [token, setToken] = useState(getToken());
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [ghUser, setGhUser] = useState<GitHubUser | null>(null);
   const [ghRepos, setGhRepos] = useState<RepoListing[]>([]);
   const [ghState, setGhState] = useState<"unknown" | "connected" | "logged-out" | "unconfigured">("unknown");
 
+  const [loadError, setLoadError] = useState("");
   const load = useCallback(async () => {
     const data = await api.projects();
     setProjects(data.projects);
   }, []);
 
   useEffect(() => {
-    void load().catch(() => setProjects([]));
+    void load().catch((err) => {
+      if (err instanceof ApiError && err.status === 401) {
+        setLoadError("This dashboard needs the operator token or a GitHub sign-in.");
+        return;
+      }
+      setProjects([]);
+    });
     // Post-OAuth landing flags (?github=connected / ?github=error).
     const params = new URLSearchParams(window.location.search);
     const flag = params.get("github");
@@ -281,7 +351,7 @@ function ProjectsView(): JSX.Element {
   }, [load]);
 
   useEffect(() => {
-    localStorage.setItem("gv_token", token);
+    setTokenValue(token);
   }, [token]);
 
   const create = async () => {
@@ -289,7 +359,7 @@ function ProjectsView(): JSX.Element {
     setBusy("create");
     setMessage("");
     try {
-      await api.createProject(name.trim(), repo.trim() || undefined, token || undefined);
+      await api.createProject(name.trim(), repo.trim() || undefined);
       setName("");
       setRepo("");
       await load();
@@ -305,7 +375,7 @@ function ProjectsView(): JSX.Element {
     setBusy(id);
     setMessage("");
     try {
-      const res = await api.reindexProject(id, repoFullName, token || undefined) as unknown as { filesIndexed: number };
+      const res = await api.reindexProject(id, repoFullName) as unknown as { filesIndexed: number };
       setMessage(`Indexed ${res.filesIndexed} files.`);
       await load();
     } catch (err) {
@@ -343,6 +413,16 @@ function ProjectsView(): JSX.Element {
   };
 
   if (!projects) return <div className="empty"><span className="loading-dots"><i /><i /><i /></span></div>;
+
+  if (loadError) {
+    return (
+      <div className="empty">
+        <div className="big">🔒</div>
+        <p>{loadError}</p>
+        <button className="btn btn-primary mt-16" onClick={() => window.location.reload()}>Unlock</button>
+      </div>
+    );
+  }
 
   const baseUrl = window.location.origin;
 
@@ -440,7 +520,7 @@ function ProjectsView(): JSX.Element {
           <input
             className="coupon-input-field"
             type="password"
-            placeholder="Dashboard token (only if the server requires one)"
+            placeholder={getToken() ? "Dashboard token — saved ✓" : "Operator dashboard token (optional)"}
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />
@@ -449,8 +529,8 @@ function ProjectsView(): JSX.Element {
           {busy === "create" ? "Creating…" : "Create project"}
         </button>
         <p className="mono-xs text-faint mt-8">
-          Paste any public repo (owner/repo) — no login needed. Projects created while logged in file issues
-          and reindex with your GitHub access, so your private repos work too.
+          Any public repo (owner/repo) indexes without logging in. Sign in with GitHub and your
+          private repos work too — issues are always filed under your own GitHub identity.
         </p>
       </div>
     </div>

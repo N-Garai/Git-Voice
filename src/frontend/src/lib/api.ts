@@ -89,21 +89,55 @@ export interface RepoListing {
 
 const base = "";
 
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${base}${path}`);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `Request failed (${res.status})`);
+/**
+ * Operator key for dashboard calls, kept in localStorage. Dashboard reads are
+ * locked server-side, so the browser must present this Bearer token (or be a
+ * logged-in GitHub user) to see report data.
+ */
+export function getToken(): string {
+  return localStorage.getItem("gv_token") ?? "";
+}
+
+export function setToken(value: string): void {
+  if (value) localStorage.setItem("gv_token", value);
+  else localStorage.removeItem("gv_token");
+}
+
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = getToken();
+  return token ? { ...extra, Authorization: `Bearer ${token}` } : { ...extra };
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function get<T>(path: string, headers?: Record<string, string>): Promise<T> {
+  const res = await fetch(`${base}${path}`, { headers: authHeaders(headers) });
+  if (!res.ok) throw new ApiError((await res.json().catch(() => ({}))).error ?? `Request failed (${res.status})`, res.status);
   return res.json() as Promise<T>;
 }
 
 async function post<T>(path: string, body?: unknown, headers?: Record<string, string>): Promise<T> {
   const res = await fetch(`${base}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: authHeaders({ "Content-Type": "application/json", ...headers }),
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `Request failed (${res.status})`);
+  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `Request failed (${res.status})`, res.status);
   return data as T;
+}
+
+/** Fetch a protected binary (report audio) with the operator key attached. */
+export async function fetchBlob(path: string): Promise<Blob> {
+  const res = await fetch(`${base}${path}`, { headers: authHeaders() });
+  if (!res.ok) throw new ApiError((await res.json().catch(() => ({}))).error ?? `Request failed (${res.status})`, res.status);
+  return res.blob();
 }
 
 export const api = {
@@ -112,18 +146,18 @@ export const api = {
     get<{ issues: IssueRecordDto[] }>(`/api/issues${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`),
   issue: (id: string) => get<{ issue: IssueRecordDto }>(`/api/issues/${id}`),
   projects: () => get<{ projects: ProjectDto[] }>("/api/projects"),
-  createProject: (name: string, repoFullName?: string, token?: string) =>
-    post<{ project: ProjectDto }>("/api/projects", { name, repoFullName }, token ? { Authorization: `Bearer ${token}` } : undefined),
-  reindexProject: (id: string, repoFullName?: string, token?: string) =>
+  createProject: (name: string, repoFullName?: string) =>
+    post<{ project: ProjectDto }>("/api/projects", { name, repoFullName }),
+  reindexProject: (id: string, repoFullName?: string) =>
     post<{ filesIndexed: number }>(
       `/api/projects/${id}/index`,
-      repoFullName ? { repoFullName } : {},
-      token ? { Authorization: `Bearer ${token}` } : undefined
+      repoFullName ? { repoFullName } : {}
     ),
   search: (projectId: string, q: string) =>
     get<{ matches: Array<{ filePath: string; componentName: string; score: number }> }>(
       `/api/projects/${projectId}/search?q=${encodeURIComponent(q)}`
     ),
+  issueAudioUrl: (id: string) => `${base}/api/issues/${id}/audio`,
   settings: () => get<{ baseUrl: string; integrations: IntegrationDto[] }>("/api/settings"),
   me: () => get<{ user: GitHubUser | null }>("/api/auth/me"),
   repos: () => get<{ repos: RepoListing[] }>("/api/repos"),

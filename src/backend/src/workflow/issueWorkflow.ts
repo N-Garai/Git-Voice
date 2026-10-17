@@ -64,6 +64,12 @@ export interface PipelineSubmit {
   transcriptSource: TranscriptSource;
 }
 
+/** Caller-supplied capacity decision (see routes/quota.ts). */
+export interface PipelineOptions {
+  /** When `allowed` is false, hosted calls are skipped for the offline engine. */
+  hostedQuota?: { allowed: boolean; reason?: string };
+}
+
 const STEP_NAMES: Record<string, string> = {
   ingest: "Ingest report",
   transcribe: "Transcribe voice",
@@ -163,8 +169,13 @@ function coerceDraft(parsed: Record<string, unknown>, fallback: DraftIssue): Dra
 
 export async function runIssuePipeline(
   submit: PipelineSubmit,
-  index: VectorIndex
+  index: VectorIndex,
+  options: PipelineOptions = {}
 ): Promise<IssueRecord | undefined> {
+  // Hosted capacity rationing: when the operator's shared model quota is
+  // under pressure the pipeline still completes — it just drafts with the
+  // offline engine instead of spending a hosted call.
+  const hostedAllowed = options.hostedQuota?.allowed ?? true;
   const issueId = crypto.randomUUID();
   const record: IssueRecord = {
     id: issueId,
@@ -197,7 +208,9 @@ export async function runIssuePipeline(
     matches: [],
     correlations: [],
     draft: null,
-    drafterLabel: "Built-in deterministic triage engine (offline)",
+    drafterLabel: hostedAllowed
+      ? "Built-in deterministic triage engine (offline)"
+      : "Built-in deterministic triage engine (offline — hosted capacity reserved)",
     confirmation: { spokenText: "", voiceBackend: "web-speech" },
     github: null
   };
@@ -228,7 +241,7 @@ export async function runIssuePipeline(
             transcriptSource: c.providedSource
           };
         }
-        if (c.audioBase64 && llmConfigured()) {
+        if (c.audioBase64 && hostedAllowed && llmConfigured()) {
           try {
             const { text } = await transcribeAudio(c.audioBase64, c.audioMime ?? "audio/webm");
             return { transcript: text, transcriptSource: "server-transcription" as TranscriptSource };
@@ -278,7 +291,7 @@ export async function runIssuePipeline(
         });
 
         let draft = heuristic;
-        if (llmConfigured()) {
+        if (hostedAllowed && llmConfigured()) {
           try {
             const { parsed, model } = await draftIssueJson({
               transcript: c.transcript,
@@ -351,14 +364,19 @@ export async function runIssuePipeline(
       name: STEP_NAMES.publish,
       run: async (c) => {
         const draft = c.draft!;
-        // Logged-in owner's token first (their private repos work), then the
-        // server-wide token, then gracefully degrade to a dashboard draft.
-        const userToken = project?.ownerLogin
+        // Publishing identity: ONLY the project owner's own OAuth token.
+        //
+        // The server-wide GITHUB_TOKEN is intentionally NOT a fallback: using
+        // it would file a stranger's report under the operator's identity, and
+        // would let anyone aim the operator's credentials at a repository by
+        // typing its name into the project form. Without an owner token the
+        // report is kept as a dashboard draft, which is the honest outcome.
+        const ownerToken = project?.ownerLogin
           ? await sessionStore.tokenForLogin(project.ownerLogin)
           : undefined;
         const github = await createGitHubIssue({
           repoFullName: project?.repoFullName,
-          userToken,
+          ownerToken,
           title: draft.title,
           body: draft.issueBody,
           labels: draft.labels

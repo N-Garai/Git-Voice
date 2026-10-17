@@ -39,5 +39,9 @@ services:
         sync: false
       - key: GITHUB_OAUTH_CLIENT_SECRET
         sync: false
+      # Operator key for the dashboard. REQUIRED in any shared deployment: with
+      # it set, dashboard reads/writes are locked to the operator or to a
+      # logged-in project owner. Generate your own with: openssl rand -hex 32
+      # (leave empty for local dev — reads then require a GitHub login).
       - key: DASHBOARD_TOKEN
         sync: false

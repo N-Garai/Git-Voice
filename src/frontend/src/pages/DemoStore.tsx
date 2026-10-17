@@ -8,8 +8,19 @@ import { useEffect, useState } from "react";
 import { SiteHeader, SiteFooter } from "../components/Chrome";
 import { useScrollReveal } from "../hooks/animations";
 import { navigate } from "../lib/router";
+import { api } from "../lib/api";
 
 export default function DemoStore(): JSX.Element {
+  // Reports require a signed-in owner, so surface that state up front instead
+  // of letting the widget fail after the client has already spoken.
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  useEffect(() => {
+    void api
+      .me()
+      .then((m) => setSignedIn(Boolean(m.user)))
+      .catch(() => setSignedIn(false));
+  }, []);
+
   const [code, setCode] = useState("");
   const [couponState, setCouponState] = useState<"idle" | "pending" | "applied" | "invalid">("idle");
   const [submitting, setSubmitting] = useState(false);
@@ -84,14 +95,28 @@ export default function DemoStore(): JSX.Element {
             <h1 className="h2">Acme Outfitters — staging build 4f19c</h1>
             <p className="lede">
               This page pretends to be a client's staging site. Something here is broken — the
-              coupon field rejects valid codes and locks checkout. Click the glowing microphone
-              button in the corner and <strong style={{ color: "var(--pink)" }}>report it like a client would</strong>:
+              coupon field rejects valid codes and locks checkout. Sign in, then click the glowing
+              microphone button in the corner and{" "}
+              <strong style={{ color: "var(--pink)" }}>report it like a client would</strong>:
               casually, emotionally, non-technically. Then open the{" "}
               <a href="/dashboard" onClick={(e) => { e.preventDefault(); navigate("/dashboard"); }}>dashboard</a> and watch the machine work.
             </p>
             <p className="mono-xs text-faint mt-8">
               widget status: {widgetLoaded ? <span className="text-cyan">loaded ✓</span> : <span className="loading-dots"><i /><i /><i /></span>}
             </p>
+            {signedIn === false && (
+              <div className="card mt-16" style={{ borderColor: "rgba(251, 191, 36, 0.35)" }}>
+                <p className="mono-xs" style={{ color: "var(--amber)", marginBottom: 10 }}>
+                  SIGN IN REQUIRED TO FILE
+                </p>
+                <p className="text-dim" style={{ fontSize: 13.5, marginBottom: 14 }}>
+                  Reports are private and each issue is filed under the project owner's own GitHub
+                  identity, so the machine needs to know who is asking. Sign in, then talk to the
+                  microphone exactly like a client would.
+                </p>
+                <a className="btn btn-primary" href="/api/auth/github">Sign in with GitHub</a>
+              </div>
+            )}
           </div>
 
           <div className="store-grid" ref={reveal.ref}>

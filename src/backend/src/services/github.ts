@@ -13,21 +13,29 @@ export function parseRepoFullName(input: string | undefined | null): { owner: st
 
 export async function createGitHubIssue(params: {
   repoFullName?: string;
-  userToken?: string;
+  /**
+   * The project owner's own OAuth token. This is the ONLY credential accepted.
+   * The server-wide GITHUB_TOKEN is deliberately not consulted here — filing a
+   * report under the operator's identity would both misattribute the author
+   * and widen the blast radius of the operator's credentials.
+   */
+  ownerToken?: string;
   title: string;
   body: string;
   labels: string[];
 }): Promise<GithubPublishResult> {
-  // Per-user OAuth token first (unlocks that user's private repos), then the
-  // server-wide publishing token, then gracefully degrade to a draft.
-  const token = params.userToken ?? config.github.token;
+  const token = params.ownerToken;
   const target = parseRepoFullName(params.repoFullName ?? config.github.defaultRepo);
 
-  if (!token) {
-    return { pushed: false, reason: "No publishing token configured — kept as a dashboard draft." };
-  }
   if (!target) {
-    return { pushed: false, reason: "No target repository configured — kept as a dashboard draft." };
+    return { pushed: false, reason: "This project has no repository configured — kept as a dashboard draft." };
+  }
+  if (!token) {
+    return {
+      pushed: false,
+      reason:
+        "No GitHub sign-in for the project owner — log in with GitHub to publish (kept as a dashboard draft)."
+    };
   }
 
   try {

@@ -411,11 +411,21 @@ root.appendChild(style);
       // Generous timeout: free-tier hosting can take ~1 min to wake from sleep.
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 75_000);
-      const res = await fetch(`${apiBase}/api/issue`, { method: "POST", body: form, signal: controller.signal });
+      const res = await fetch(`${apiBase}/api/issue`, {
+        method: "POST",
+        body: form,
+        // Same-origin embeds carry the session cookie; cross-origin staging
+        // sites do not (SameSite=Lax), so those need the owner signed in.
+        credentials: "include",
+        signal: controller.signal
+      });
       clearTimeout(timeout);
 
       if (!res.ok) {
         const err = (await res.json().catch(() => ({ error: `Server responded ${res.status}` }))) as { error?: string };
+        if (res.status === 401) {
+          throw new Error("Sign in with GitHub on this page first, then send the report.");
+        }
         throw new Error(err.error ?? `Server responded ${res.status}`);
       }
       const data = (await res.json()) as { issue: any };

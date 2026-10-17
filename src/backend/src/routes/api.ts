@@ -1,9 +1,16 @@
 /**
  * REST API surface (all JSON under /api, plus /health and /api/widget.js).
  *
- * Mutations optionally require `Authorization: Bearer <DASHBOARD_TOKEN>` when
- * that env var is set — issue filing from the widget stays open (it is the
- * product's front door) but is rate-limited per IP.
+ * Access model:
+ *  - Dashboard READS and MUTATIONS are closed by default. A caller must be
+ *    either the operator (`Authorization: Bearer <DASHBOARD_TOKEN>`) or a
+ *    logged-in GitHub user whose session matches the project's owner. Report
+ *    data (transcripts, telemetry, audio) is never served to anonymous users.
+ *  - `POST /api/issue` is the widget's front door and stays open, protected by
+ *    per-IP + hourly hosted-capacity limits instead.
+ *  - GitHub publishing uses only the *project owner's own* OAuth token, so a
+ *    report is always filed under the identity of the developer who owns the
+ *    project — never under the server operator's credentials.
  */
 import { Hono } from "hono";
 import crypto from "node:crypto";
@@ -15,6 +22,7 @@ import type { VectorIndex } from "../store/vectorIndex.js";
 import { runIssuePipeline } from "../workflow/issueWorkflow.js";
 import { parseTelemetry } from "./schemas.js";
 import { checkRateLimit, clientIp } from "./rateLimit.js";
+import { claimHostedQuota } from "./quota.js";
 import { indexFixtureProject, indexGitHubRepo, parseRepo } from "../indexer/indexProject.js";
 import { DEMO_PROJECT_ID, DEMO_PROJECT_NAME } from "../indexer/fixtures.js";
 import {
@@ -30,6 +38,13 @@ import {
   sessionCookie,
   clearSessionCookie
 } from "../store/sessions.js";
+import {
+  callerFrom,
+  canReadProject,
+  visibleProjects,
+  visibleIssues,
+  type Caller
+} from "../store/access.js";
 
 export interface ApiEnv {
   Variables: {
@@ -44,16 +59,63 @@ function issueSummary(r: IssueRecord) {
   return rest;
 }
 
-async function requireAuth(headers: Record<string, string>): Promise<boolean> {
-  if (!config.dashboardToken) return true;
-  const header = headers["authorization"] ?? "";
-  return header === `Bearer ${config.dashboardToken}`;
-}
+const UNAUTHORIZED = { error: "Unauthorized — log in with GitHub or provide the dashboard token." };
+
+/**
+ * Widget submissions must come from an authenticated caller.
+ *
+ * Rationale: without a session, anyone could burn the operator's hosted-model
+ * quota and write into projects they do not own. Trade-off to be aware of: the
+ * session cookie is SameSite=Lax, so a report filed from a *third-party*
+ * staging site (the widget's normal deployment) will not carry it. In that
+ * setup the widget's owner has to be signed in on that browser.
+ */
+const REPORTS_REQUIRE_SIGN_IN = true;
 
 /** Logged-in GitHub session from the HttpOnly cookie (undefined when logged out). */
 async function sessionFromCookie(cookieHeader: string | undefined) {
   return sessionStore.get(sessionIdFromCookie(cookieHeader));
 }
+
+/** Resolve the caller identity for this request. */
+async function caller(c: { req: { header: (n: string) => string | undefined } }): Promise<Caller> {
+  const session = await sessionFromCookie(c.req.header("cookie"));
+  return callerFrom(session, { authorization: c.req.header("authorization") ?? "" });
+}
+
+/** Hono context narrowed to the bare surface these guards need. */
+type GuardContext = {
+  req: { header: (name: string) => string | undefined };
+};
+
+/**
+ * Dashboard guards. These resolve the caller and report whether the request may
+ * proceed — they never write a response, because a Hono handler that returns
+ * `undefined` falls through to the 404 handler. Callers must branch on the
+ * result and return `c.json(UNAUTHORIZED, 401)` themselves.
+ */
+type Guard<T = void> = (c: GuardContext, arg: T) => Promise<Caller | null>;
+
+const allowRead = (async (c: GuardContext): Promise<Caller | null> => {
+  const who = await caller(c);
+  return !who.operator && !who.session ? null : who;
+}) satisfies Guard<undefined>;
+
+/** Guard for mutations on an existing project: operator or that project's owner. */
+const allowWriteProject = (async (
+  c: GuardContext,
+  project: Project | undefined
+): Promise<Caller | null> => {
+  const who = await caller(c);
+  if (who.operator) return who;
+  return project && canReadProject(who, project, DEMO_PROJECT_ID) ? who : null;
+}) satisfies Guard<Project | undefined>;
+
+/** Guard for creating new projects — no project exists yet to scope against. */
+const allowCreateProject = (async (c: GuardContext): Promise<Caller | null> => {
+  const who = await caller(c);
+  return !who.operator && !who.session ? null : who;
+}) satisfies Guard<undefined>;
 
 export function apiRoutes(index: VectorIndex): Hono {
   const app = new Hono();
@@ -68,36 +130,78 @@ export function apiRoutes(index: VectorIndex): Hono {
     })
   );
 
-  // ---------------------------------------------------------------- issues
-  app.get("/api/issues", (c) => {
+// ---------------------------------------------------------------- issues
+  // Every read below is tenant-scoped: a logged-in developer sees only reports
+  // for projects stamped with their GitHub login; the operator sees all.
+  app.get("/api/issues", async (c) => {
+    const who = await allowRead(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
+    const all = projectStore.list();
     const projectId = c.req.query("projectId") ?? undefined;
-    return c.json({ issues: issueStore.list(projectId).map(issueSummary) });
+    if (projectId) {
+      const project = projectStore.get(projectId);
+      if (!canReadProject(who, project, DEMO_PROJECT_ID)) return c.json(UNAUTHORIZED, 401);
+      return c.json({ issues: issueStore.list(projectId).map(issueSummary) });
+    }
+    return c.json({ issues: visibleIssues(who, issueStore.list(), all, DEMO_PROJECT_ID).map(issueSummary) });
   });
 
-  app.get("/api/issues/:id", (c) => {
+  app.get("/api/issues/:id", async (c) => {
+    const who = await allowRead(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
     const record = issueStore.get(c.req.param("id"));
     if (!record) return c.json({ error: "Issue not found" }, 404);
+    if (!canReadProject(who, projectStore.get(record.projectId), DEMO_PROJECT_ID)) {
+      return c.json(UNAUTHORIZED, 401);
+    }
     return c.json({ issue: issueSummary(record) });
   });
 
-  app.get("/api/issues/:id/audio", (c) => {
-    const audio = issueStore.getAudio(c.req.param("id"));
+  app.get("/api/issues/:id/audio", async (c) => {
+    const who = await allowRead(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
+    const id = c.req.param("id");
+    const record = issueStore.get(id);
+    if (!record) return c.json({ error: "Issue not found" }, 404);
+    if (!canReadProject(who, projectStore.get(record.projectId), DEMO_PROJECT_ID)) {
+      return c.json(UNAUTHORIZED, 401);
+    }
+    const audio = issueStore.getAudio(id);
     if (!audio) return c.json({ error: "No audio attached to this report" }, 404);
     return c.body(Buffer.from(audio.base64, "base64"), 200, {
       "Content-Type": audio.mime,
-      "Cache-Control": "private, max-age=3600"
+      "Cache-Control": "private, no-store"
     });
   });
 
-  app.get("/api/issues/:id/body.md", (c) => {
+  app.get("/api/issues/:id/body.md", async (c) => {
+    const who = await allowRead(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
     const record = issueStore.get(c.req.param("id"));
-    if (!record?.result) return c.json({ error: "No draft for this report" }, 404);
+    if (!record) return c.json({ error: "Issue not found" }, 404);
+    if (!canReadProject(who, projectStore.get(record.projectId), DEMO_PROJECT_ID)) {
+      return c.json(UNAUTHORIZED, 401);
+    }
+    if (!record.result) return c.json({ error: "No draft for this report" }, 404);
     return c.body(record.result.draft.issueBody, 200, {
-      "Content-Type": "text/markdown; charset=utf-8"
+      "Content-Type": "text/markdown; charset=utf-8",
+      "Cache-Control": "private, no-store"
     });
   });
 
   app.post("/api/issue", async (c) => {
+const submittingCaller = await caller(c);
+
+    // Sign-in is required: an anonymous submission could otherwise spend the
+    // operator's hosted quota and write into a project they do not own.
+    if (REPORTS_REQUIRE_SIGN_IN && !submittingCaller.operator && !submittingCaller.session) {
+      return c.json(
+        { error: "Sign in with GitHub to file a report — anonymous submissions are disabled." },
+        401
+      );
+    }
+
+    // Layered limits on top of auth, so one signed-in user still cannot flood.
     const limit = checkRateLimit(clientIp(c.req.header()));
     if (!limit.allowed) {
       return c.json(
@@ -106,6 +210,8 @@ export function apiRoutes(index: VectorIndex): Hono {
         { "Retry-After": String(Math.ceil((limit.retryAfterMs ?? 60_000) / 1000)) }
       );
     }
+
+    const quota = claimHostedQuota("authenticated");
 
     let projectId = "";
     let transcript = "";
@@ -147,8 +253,15 @@ export function apiRoutes(index: VectorIndex): Hono {
       return c.json({ error: "Malformed request body" }, 400);
     }
 
-    if (!projectId || !projectStore.get(projectId)) {
+const targetProject = projectId ? projectStore.get(projectId) : undefined;
+    if (!projectId || !targetProject) {
       return c.json({ error: "Unknown projectId — create the project first" }, 400);
+    }
+
+    // A report may only be filed into a project the caller owns (or the demo).
+    // Otherwise any signed-in user could inject noise into someone else's log.
+    if (!canReadProject(submittingCaller, targetProject, DEMO_PROJECT_ID)) {
+      return c.json(UNAUTHORIZED, 401);
     }
 
     let telemetry;
@@ -170,7 +283,8 @@ export function apiRoutes(index: VectorIndex): Hono {
         transcript: transcript || undefined,
         transcriptSource
       },
-      index
+      index,
+      { hostedQuota: quota }
     );
 
     if (!record) return c.json({ error: "Pipeline failed before producing a record" }, 500);
@@ -178,16 +292,24 @@ export function apiRoutes(index: VectorIndex): Hono {
   });
 
   // ---------------------------------------------------------------- projects
-  app.get("/api/projects", (c) => c.json({ projects: projectStore.list() }));
+  app.get("/api/projects", async (c) => {
+    const who = await allowRead(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
+    return c.json({ projects: visibleProjects(who, projectStore.list(), DEMO_PROJECT_ID) });
+  });
 
-  app.get("/api/projects/:id", (c) => {
+  app.get("/api/projects/:id", async (c) => {
+    const who = await allowRead(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
     const project = projectStore.get(c.req.param("id"));
     if (!project) return c.json({ error: "Project not found" }, 404);
+    if (!canReadProject(who, project, DEMO_PROJECT_ID)) return c.json(UNAUTHORIZED, 401);
     return c.json({ project });
   });
 
   app.post("/api/projects", async (c) => {
-    if (!(await requireAuth(c.req.header()))) return c.json({ error: "Unauthorized" }, 401);
+    const who = await allowCreateProject(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
 
     let body: Record<string, unknown>;
     try {
@@ -197,7 +319,7 @@ export function apiRoutes(index: VectorIndex): Hono {
     }
 
     const name = typeof body.name === "string" ? body.name.trim() : "";
-    if (!name || name.length > 80) return c.json({ error: "A project name (1-80 chars) is required" }, 400);
+    if (!name || name.length > 80) return c.json({ error: "A project name (1-80 chars) is required", }, 400);
 
     let repoFullName: string | undefined;
     if (typeof body.repoFullName === "string" && body.repoFullName.trim()) {
@@ -209,24 +331,23 @@ export function apiRoutes(index: VectorIndex): Hono {
     }
 
     const id = `prj_${crypto.randomUUID().slice(0, 12)}`;
-    // Stamp the creator's GitHub login when logged in — the pipeline then
-    // publishes/indexes with their token (private repos work). Logged-out
-    // projects keep working for public repos via the server token.
-    const creator = await sessionFromCookie(c.req.header("cookie"));
+    // The creator's GitHub login becomes the project's owner. Every later
+    // action on this project (index, publish) uses *their* token — the
+    // server operator's credentials are never involved.
     const project = makeProject({
       id,
       name,
       repoFullName,
-      ownerLogin: creator?.githubLogin
+      ownerLogin: who.session?.githubLogin
     });
     await projectStore.upsert(project);
     return c.json({ project }, 201);
   });
 
   app.post("/api/projects/:id/index", async (c) => {
-    if (!(await requireAuth(c.req.header()))) return c.json({ error: "Unauthorized" }, 401);
-
     const project = projectStore.get(c.req.param("id"));
+    const who = await allowWriteProject(c, project);
+    if (!who) return c.json(UNAUTHORIZED, 401);
     if (!project) return c.json({ error: "Project not found" }, 404);
 
     let body: Record<string, unknown> = {};
@@ -249,18 +370,16 @@ export function apiRoutes(index: VectorIndex): Hono {
 
     projectStore.upsert({ ...project, indexStatus: "indexing", indexError: undefined });
 
-    // Requester's token first (they clicked Re-index), then the project
-    // owner's stored token (webhook / shared links), then public-only.
-    const requester = await sessionFromCookie(c.req.header("cookie"));
+    // Only ever the project owner's own credential: the operator's token is
+    // never used, so indexing can never touch a repo the owner cannot read.
     const ownerToken = project.ownerLogin
       ? await sessionStore.tokenForLogin(project.ownerLogin)
       : undefined;
-    const userToken = requester?.token ?? ownerToken;
 
     try {
       const result = isDemo || !repoInput
         ? await indexFixtureProject(project, index)
-        : await indexGitHubRepo(project, repoInput, index, userToken);
+        : await indexGitHubRepo(project, repoInput, index, ownerToken);
       await projectStore.upsert(result.project);
       return c.json({
         project: result.project,
@@ -278,7 +397,10 @@ export function apiRoutes(index: VectorIndex): Hono {
 
   app.get("/api/projects/:id/search", async (c) => {
     const project = projectStore.get(c.req.param("id"));
+    const who = await allowRead(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
     if (!project) return c.json({ error: "Project not found" }, 404);
+    if (!canReadProject(who, project, DEMO_PROJECT_ID)) return c.json(UNAUTHORIZED, 401);
     const q = c.req.query("q")?.trim();
     if (!q) return c.json({ error: "Missing ?q= query parameter" }, 400);
 

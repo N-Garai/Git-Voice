@@ -76,6 +76,11 @@ export const config = {
 } as const;
 
 /** Machine-readable health for the settings page + /health. */
+/** GitHub login is usable only when both OAuth env keys are present. */
+function oauthConfigured(): boolean {
+  return Boolean(config.github.oauthClientId && config.github.oauthClientSecret);
+}
+
 export function integrationStatuses(): IntegrationStatus[] {
   return [
     {
@@ -121,12 +126,10 @@ export function integrationStatuses(): IntegrationStatus[] {
     {
       id: "github",
       label: "GitHub publishing",
-      envKey: "GITHUB_TOKEN",
-      configured: Boolean(config.github.token),
-      activeMode: config.github.defaultRepo
-        ? `Issues created in ${config.github.defaultRepo}`
-        : "Issues created in the project's repository",
-      fallbackMode: "Issues kept as dashboard drafts (never published)"
+      envKey: "GITHUB_OAUTH_CLIENT_ID",
+      configured: oauthConfigured(),
+      activeMode: "Issues filed with each project owner's own GitHub identity",
+      fallbackMode: "Projects without a signed-in owner stay as dashboard drafts"
     },
     {
       id: "github-login",
@@ -136,21 +139,13 @@ export function integrationStatuses(): IntegrationStatus[] {
       activeMode: "Developers log in with GitHub; private repos work per-user",
       fallbackMode: "Logged-out mode — any public owner/repo link works"
     },
-    {
-      id: "webhook",
-      label: "Reindex webhook",
-      envKey: "GITHUB_WEBHOOK_SECRET",
-      configured: Boolean(config.github.webhookSecret),
-      activeMode: "Signed push events trigger reindexing",
-      fallbackMode: "Manual reindex from the dashboard"
-    },
-    {
+{
       id: "auth",
-      label: "Dashboard write auth",
+      label: "Dashboard access",
       envKey: "DASHBOARD_TOKEN",
       configured: Boolean(config.dashboardToken),
-      activeMode: "Bearer token required for mutations",
-      fallbackMode: "Open mode (fine for local demos)"
+      activeMode: "Operator key + per-owner tenant isolation",
+      fallbackMode: "Owner-scoped access only (GitHub login required)"
     }
   ];
 }

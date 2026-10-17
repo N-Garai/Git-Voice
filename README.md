@@ -108,10 +108,15 @@ The server runs with zero configuration. Every key is optional (see [.env.exampl
 | `GOOGLE_API_KEY` | Server-side transcription + LLM issue drafting + hosted embeddings. Free tier, no credit card. |
 | `DATABASE_URL` | PostgreSQL + pgvector persistence for the architecture index. |
 | `ELEVENLABS_API_KEY` | Server-rendered speech audio for the client confirmation (unset = browser speech, always free). |
-| `GITHUB_TOKEN` + `GITHUB_DEFAULT_REPO` | Publishing issues to GitHub with labels. |
+| `GITHUB_OAUTH_CLIENT_ID` + `GITHUB_OAUTH_CLIENT_SECRET` | GitHub sign-in. Required to use the app at all: it unlocks private repos and makes each developer the publishing identity of their own issues. |
+| `GITHUB_TOKEN` + `GITHUB_DEFAULT_REPO` | Optional server-side automation + higher REST rate limit. Not used to file issues. |
 | `GITHUB_WEBHOOK_SECRET` | Push webhook that re-indexes a project on every commit. |
-| `DASHBOARD_TOKEN` | Requires a bearer token for dashboard mutations. |
+| `DASHBOARD_TOKEN` | Adds an operator key that sees every project. Generate with `openssl rand -hex 32`. |
 | `DATA_DIR` | Persists issue records + audio to disk. |
+
+Reports, transcripts, telemetry and audio are private: only the project owner (or the
+operator key) can read them, and every filed issue is created with the owner's own
+GitHub identity — never with a server-wide credential.
 
 Health of every integration is visible in the dashboard's **Settings** tab and via
 `GET /api/settings`.
@@ -151,11 +156,24 @@ npm run build      # frontend + widget + backend production builds
 ## Security notes
 
 - The widget is served with a scoped shadow-DOM bundle; host page styles never collide.
-- Issue filing is rate-limited per IP; dashboard mutations are bearer-token gated when
-  `DASHBOARD_TOKEN` is set.
+- **Authentication is required.** Every dashboard read and every report filing needs a
+  GitHub sign-in (or the operator key); anonymous callers get `401`. Reads are scoped to
+  the caller's own projects, so one developer can never see another's transcripts,
+  telemetry or audio — including the bundled demo, which is shared only as a fixture.
+- **Publishing identity is per-owner.** Issues are created with the project owner's own
+  OAuth token, so the GitHub author is the developer who owns the project. No
+  server-wide credential is ever used to file, and no one can point the operator's
+  credentials at a repository by typing its name into a form.
+- The operator key is compared in constant time; session ids are 256-bit random values
+  held in `HttpOnly; SameSite=Lax; Secure` cookies, and OAuth codes are single-use.
+- The operator's hosted-model quota is protected: per-IP rate limiting plus an hourly
+  capacity guard that degrades to the offline engine instead of being exhausted.
 - The first report is capped at 30 s audio; console/error/click buffers are capped too.
 - Telemetry shown in the GitHub body is exactly what's captured — no secrets ride along.
 - Webhook verification uses constant-time HMAC comparison.
+- Known limitation: because the session cookie is `SameSite=Lax`, a report filed from a
+  third-party staging site does not carry a session. In that deployment the widget's
+  owner must be signed in on that browser.
 
 ## License
 
