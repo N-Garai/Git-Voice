@@ -21,6 +21,22 @@ export interface FileSignature {
   signature: string;
 }
 
+/**
+ * Files with no meaningful extension whose contents still describe how the
+ * project builds and runs — a frequent source of deployment bugs.
+ */
+const EXTENSIONLESS_FILES = [
+  "dockerfile", "containerfile", "makefile", "gnumakefile", "jenkinsfile",
+  "procfile", "cmakelists.txt", "rakefile", "brewfile", "justfile", "vagrantfile"
+];
+
+/** Dotfiles that describe toolchain or ignore rules rather than app code. */
+const DOTFILE_PATTERNS = [
+  ".gitignore", ".dockerignore", ".npmrc", ".nvmrc", ".node-version",
+  ".python-version", ".ruby-version", ".tool-versions", ".editorconfig",
+  ".gitattributes", ".env.example", ".env.sample", ".prettierrc", ".eslintrc"
+];
+
 const TEXT_EXTENSIONS = [
   // Web front end
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro",
@@ -59,32 +75,105 @@ const BINARY_EXTENSIONS = [
 export function isIndexableFile(filePath: string, sizeBytes: number): boolean {
   if (sizeBytes > 200 * 1024) return false;
   const lower = filePath.toLowerCase();
-  if (SKIP_FILES.some((f) => lower.endsWith(f))) return false;
-  if (BINARY_EXTENSIONS.some((ext) => lower.endsWith(ext))) return false;
+  const base = lower.split("/").pop() ?? lower;
+
+  if (SKIP_FILES.some((f) => base === f || base.endsWith(f))) return false;
+  if (BINARY_EXTENSIONS.some((ext) => base.endsWith(ext))) return false;
   const dirParts = lower.split("/");
   if (dirParts.some((p) => SKIP_DIRS.includes(p))) return false;
-  return TEXT_EXTENSIONS.some((ext) => lower.endsWith(ext));
+
+  if (TEXT_EXTENSIONS.some((ext) => base.endsWith(ext))) return true;
+  // Build/tooling files that carry no extension: Dockerfile, Makefile, Procfile…
+  if (EXTENSIONLESS_FILES.some((name) => base === name || base.startsWith(`${name}.`))) return true;
+  // Toolchain + ignore dotfiles (.nvmrc, .gitignore, .editorconfig…).
+  if (DOTFILE_PATTERNS.includes(base)) return true;
+
+  return false;
 }
 
 export function baseComponentName(filePath: string): string {
   const base = filePath.split("/").pop() ?? filePath;
-  return base.replace(/\.[^.]+$/, "");
+  // Known source extensions are stripped; anything else (Dockerfile, Makefile,
+  // .nvmrc, Dockerfile.prod) keeps its full name so it never becomes empty.
+  const known = TEXT_EXTENSIONS.concat(BINARY_EXTENSIONS);
+  const dot = base.lastIndexOf(".");
+  if (dot > 0) {
+    const ext = base.slice(dot).toLowerCase();
+    if (known.includes(ext)) return base.slice(0, dot);
+  }
+  return base;
 }
 
 function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
 }
 
+/**
+ * Build/tooling files have their own instruction vocabulary. Exposing the
+ * important directives (base image, exposed port, entrypoint, targets) is what
+ * lets a report like "the deploy fails on Render" point at the right file.
+ */
+function extractToolingDirectives(source: string): string[] {
+  const out: string[] = [];
+  const add = (v: string | undefined) => {
+    if (v && !out.includes(v) && out.length < 12) out.push(v);
+  };
+
+  if (/^\s*FROM\s+/im.test(source)) {
+    for (const m of source.matchAll(/^\s*FROM\s+([^\s]+)(?:\s+AS\s+([^\s]+))?/gim)) {
+      add(m[2] ? `${m[1]} AS ${m[2]}` : m[1]);
+    }
+  }
+  if (/^\s*EXPOSE\s+/im.test(source)) {
+    for (const m of source.matchAll(/^\s*EXPOSE\s+([0-9]+(?:\s+[0-9]+)*)/gim)) {
+      for (const port of m[1].split(/\s+/)) add(`EXPOSE ${port}`);
+    }
+  }
+  if (/^\s*CMD\s+/im.test(source)) {
+    for (const m of source.matchAll(/^\s*CMD\s+\[?\[?\s*["']([^"']{2,80})/gim)) add(`CMD ${m[1]}`);
+  }
+  if (/^\s*ENTRYPOINT\s+/im.test(source)) {
+    for (const m of source.matchAll(/^\s*ENTRYPOINT\s+\[?\[?\s*["']([^"']{2,80})/gim)) {
+      add(`ENTRYPOINT ${m[1]}`);
+    }
+  }
+  for (const m of source.matchAll(
+    /^[ \t]*(?:FROM[ \t]+\S+[ \t]+)?RUN[ \t]+((?:npm|yarn|pnpm|pip3?|python3?|go|cargo|bun|apt|apt-get|apk|mvn|gradle)[ \t]+[^\n&|]{1,60})/gim
+  )) {
+    add(`RUN ${m[1].replace(/\s+/g, " ").trim()}`);
+  }
+  return out;
+}
+
+/** Targets/commands for Makefiles and friends. */
+function extractMakeTargets(source: string): string[] {
+  const out: string[] = [];
+  for (const m of source.matchAll(/^([A-Za-z0-9_.\-/]+)\s*:(?!=)/gm)) {
+    const target = m[1].trim();
+    if (target && !out.includes(target) && out.length < 12) out.push(target);
+  }
+  return out;
+}
+
 export function extractSignature(filePath: string, source: string): FileSignature {
-  const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
+  const lowerPath = filePath.toLowerCase();
+  const extIndex = lowerPath.lastIndexOf(".");
+  const base = lowerPath.split("/").pop() ?? lowerPath;
+  const ext = extIndex > lowerPath.lastIndexOf("/") ? lowerPath.slice(extIndex) : "";
   const componentName = baseComponentName(filePath);
   const isStyle = ext === ".css" || ext === ".scss" || ext === ".sass" || ext === ".less";
   const isMarkup = ext === ".html" || ext === ".htm";
   const isProse = PROSE_EXTENSIONS.has(ext);
+  const isContainerfile = /^dockerfile(\..*)?$/.test(base) || base === "containerfile";
+  const isMakefile = base === "makefile" || base === "gnumakefile" || base === "rakefile";
 
-// Exported symbols ---------------------------------------------------------
+  // Exported symbols ---------------------------------------------------------
   const exportedSymbols: string[] = [];
-  if (!isStyle && !isMarkup && !isProse) {
+  if (isContainerfile) {
+    exportedSymbols.push(...extractToolingDirectives(source));
+  } else if (isMakefile) {
+    exportedSymbols.push(...extractMakeTargets(source));
+  } else if (!isStyle && !isMarkup && !isProse) {
     const patterns = [
       // ES modules / TypeScript
       /export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z0-9_$]+)/g,

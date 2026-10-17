@@ -67,9 +67,15 @@ The index covers **web front end and back end**, not just JavaScript:
 | Front end | `.ts .tsx .js .jsx .mjs .cjs .vue .svelte .astro .html .htm .css .scss .sass .less` |
 | Back end | `.py .java .go .rs .rb .php .cs .kt .swift .scala .ex .exs .hs .lua .dart .sql .graphql .proto` |
 | Config / prose | `.sh .bash .zsh .yml .yaml .toml .json .md .mdx` |
+| Build / tooling | `Dockerfile`, `Containerfile`, `Makefile`, `Procfile`, `CMakeLists.txt`, `Jenkinsfile`, `Rakefile`, `.nvmrc`, `.python-version`, `.tool-versions`, `.editorconfig`, `.gitignore`, `.dockerignore` |
 
 Prose and config files are indexed for **intent** (`README.md` describing the
 coupon flow is useful evidence) but contribute no symbols.
+
+Container and build files are understood too: a `Dockerfile` contributes its base
+images and stage names (`node:22-alpine AS runtime`), exposed ports, `CMD`/`ENTRYPOINT`,
+and the commands it runs (`RUN npm ci`). That is what lets a report like *"the deploy
+fails on Render"* point at the right file instead of guessing at application code.
 
 Symbol extraction is language-aware — `def`/`class` in Python, `func`/`type` in Go,
 `fn`/`struct` in Rust, `class`/`interface`/`record` in JVM and .NET, `def`/`class` in
