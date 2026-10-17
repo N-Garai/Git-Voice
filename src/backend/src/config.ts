@@ -51,7 +51,17 @@ export const config = {
   github: {
     token: str("GITHUB_TOKEN"),
     defaultRepo: str("GITHUB_DEFAULT_REPO"),
-    webhookSecret: str("GITHUB_WEBHOOK_SECRET")
+    webhookSecret: str("GITHUB_WEBHOOK_SECRET"),
+    oauthClientId: str("GITHUB_OAUTH_CLIENT_ID"),
+    oauthClientSecret: str("GITHUB_OAUTH_CLIENT_SECRET")
+  },
+
+  auth: {
+    // Opaque 256-bit session ids — no signing secret needed. Sessions live in
+    // memory and mirror to Postgres when DATABASE_URL is set, so they survive
+    // free-tier sleeps/restarts instead of forcing a re-login.
+    sessionCookieName: "gv_session",
+    sessionMaxAgeMs: 30 * 24 * 60 * 60 * 1000
   },
 
   limits: {
@@ -117,6 +127,14 @@ export function integrationStatuses(): IntegrationStatus[] {
         ? `Issues created in ${config.github.defaultRepo}`
         : "Issues created in the project's repository",
       fallbackMode: "Issues kept as dashboard drafts (never published)"
+    },
+    {
+      id: "github-login",
+      label: "GitHub login",
+      envKey: "GITHUB_OAUTH_CLIENT_ID",
+      configured: Boolean(config.github.oauthClientId && config.github.oauthClientSecret),
+      activeMode: "Developers log in with GitHub; private repos work per-user",
+      fallbackMode: "Logged-out mode — any public owner/repo link works"
     },
     {
       id: "webhook",

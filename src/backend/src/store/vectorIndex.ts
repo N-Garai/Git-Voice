@@ -236,12 +236,28 @@ CREATE TABLE IF NOT EXISTS git_voice_projects (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   repo_full_name TEXT,
+  owner_login TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   indexed_at TIMESTAMPTZ,
   index_count INTEGER NOT NULL DEFAULT 0,
   embedder_id TEXT NOT NULL DEFAULT 'hashed',
   index_status TEXT NOT NULL DEFAULT 'empty'
 );
+
+-- Added after initial deploy: owner_login for GitHub-login projects.
+ALTER TABLE git_voice_projects ADD COLUMN IF NOT EXISTS owner_login TEXT;
+
+-- GitHub-login sessions: opaque ids, tokens server-side only. Mirrors the
+-- in-memory session store so logins survive free-tier sleeps/restarts.
+CREATE TABLE IF NOT EXISTS git_voice_sessions (
+  id TEXT PRIMARY KEY,
+  github_user_id BIGINT NOT NULL,
+  github_login TEXT NOT NULL,
+  token TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gv_sessions_login ON git_voice_sessions (github_login);
 `;
 
 export class PgVectorIndex implements VectorIndex {

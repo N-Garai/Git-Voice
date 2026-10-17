@@ -17,7 +17,19 @@ import { parseTelemetry } from "./schemas.js";
 import { checkRateLimit, clientIp } from "./rateLimit.js";
 import { indexFixtureProject, indexGitHubRepo, parseRepo } from "../indexer/indexProject.js";
 import { DEMO_PROJECT_ID, DEMO_PROJECT_NAME } from "../indexer/fixtures.js";
-import { verifyWebhookSignature } from "../services/github.js";
+import {
+  verifyWebhookSignature,
+  oauthAuthorizeUrl,
+  exchangeOAuthCode,
+  listUserRepos
+} from "../services/github.js";
+import {
+  sessionStore,
+  oauthConfigured,
+  sessionIdFromCookie,
+  sessionCookie,
+  clearSessionCookie
+} from "../store/sessions.js";
 
 export interface ApiEnv {
   Variables: {
@@ -36,6 +48,11 @@ async function requireAuth(headers: Record<string, string>): Promise<boolean> {
   if (!config.dashboardToken) return true;
   const header = headers["authorization"] ?? "";
   return header === `Bearer ${config.dashboardToken}`;
+}
+
+/** Logged-in GitHub session from the HttpOnly cookie (undefined when logged out). */
+async function sessionFromCookie(cookieHeader: string | undefined) {
+  return sessionStore.get(sessionIdFromCookie(cookieHeader));
 }
 
 export function apiRoutes(index: VectorIndex): Hono {
@@ -192,7 +209,16 @@ export function apiRoutes(index: VectorIndex): Hono {
     }
 
     const id = `prj_${crypto.randomUUID().slice(0, 12)}`;
-    const project = makeProject({ id, name, repoFullName });
+    // Stamp the creator's GitHub login when logged in — the pipeline then
+    // publishes/indexes with their token (private repos work). Logged-out
+    // projects keep working for public repos via the server token.
+    const creator = await sessionFromCookie(c.req.header("cookie"));
+    const project = makeProject({
+      id,
+      name,
+      repoFullName,
+      ownerLogin: creator?.githubLogin
+    });
     await projectStore.upsert(project);
     return c.json({ project }, 201);
   });
@@ -223,10 +249,18 @@ export function apiRoutes(index: VectorIndex): Hono {
 
     projectStore.upsert({ ...project, indexStatus: "indexing", indexError: undefined });
 
+    // Requester's token first (they clicked Re-index), then the project
+    // owner's stored token (webhook / shared links), then public-only.
+    const requester = await sessionFromCookie(c.req.header("cookie"));
+    const ownerToken = project.ownerLogin
+      ? await sessionStore.tokenForLogin(project.ownerLogin)
+      : undefined;
+    const userToken = requester?.token ?? ownerToken;
+
     try {
       const result = isDemo || !repoInput
         ? await indexFixtureProject(project, index)
-        : await indexGitHubRepo(project, repoInput, index);
+        : await indexGitHubRepo(project, repoInput, index, userToken);
       await projectStore.upsert(result.project);
       return c.json({
         project: result.project,
@@ -256,6 +290,61 @@ export function apiRoutes(index: VectorIndex): Hono {
   app.get("/api/settings", (c) =>
     c.json({ baseUrl: config.baseUrl, integrations: integrationStatuses() })
   );
+
+  // ---------------------------------------------------------------- auth
+  // GitHub OAuth login (free OAuth App). Logged-out users keep full access to
+  // public repos; logging in additionally unlocks the user's private repos.
+  // Disabled with a clear error until GITHUB_OAUTH_CLIENT_ID/SECRET are set.
+  app.get("/api/auth/github", (c) => {
+    if (!oauthConfigured()) return c.json({ error: "GitHub login not configured" }, 404);
+    const state = sessionStore.createState();
+    return c.redirect(oauthAuthorizeUrl(state), 302);
+  });
+
+  app.get("/api/auth/github/callback", async (c) => {
+    if (!oauthConfigured()) return c.json({ error: "GitHub login not configured" }, 404);
+    const code = c.req.query("code");
+    const state = c.req.query("state");
+    if (!code || !sessionStore.consumeState(state)) {
+      return c.redirect("/dashboard/projects?github=error", 302);
+    }
+    try {
+      const account = await exchangeOAuthCode(code);
+      const session = await sessionStore.create(
+        account.githubUserId,
+        account.githubLogin,
+        account.accessToken
+      );
+      c.header("Set-Cookie", sessionCookie(session.id));
+      return c.redirect("/dashboard/projects?github=connected", 302);
+    } catch {
+      return c.redirect("/dashboard/projects?github=error", 302);
+    }
+  });
+
+  app.get("/api/auth/me", async (c) => {
+    const session = await sessionFromCookie(c.req.header("cookie"));
+    if (!session) return c.json({ user: null });
+    return c.json({ user: { login: session.githubLogin, id: session.githubUserId } });
+  });
+
+  app.post("/api/auth/logout", async (c) => {
+    const id = sessionIdFromCookie(c.req.header("cookie"));
+    if (id) await sessionStore.destroy(id);
+    c.header("Set-Cookie", clearSessionCookie());
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/repos", async (c) => {
+    if (!oauthConfigured()) return c.json({ error: "GitHub login not configured" }, 404);
+    const session = await sessionFromCookie(c.req.header("cookie"));
+    if (!session) return c.json({ error: "Login with GitHub first" }, 401);
+    try {
+      return c.json({ repos: await listUserRepos(session.token) });
+    } catch {
+      return c.json({ error: "Could not list repositories — try logging in again" }, 502);
+    }
+  });
 
   // ---------------------------------------------------------------- webhook
   app.post("/api/webhook/gh-push", async (c) => {
@@ -289,8 +378,13 @@ export function apiRoutes(index: VectorIndex): Hono {
     if (!target) return c.json({ ok: true, ignored: "no project maps to this repository" });
 
     projectStore.upsert({ ...target, indexStatus: "indexing" });
+    // Webhooks carry no user session — use the owner's stored token so
+    // private-repo projects still reindex; public repos work without one.
+    const ownerToken = target.ownerLogin
+      ? await sessionStore.tokenForLogin(target.ownerLogin)
+      : undefined;
     try {
-      const result = await indexGitHubRepo(target, repoFullName, index);
+      const result = await indexGitHubRepo(target, repoFullName, index, ownerToken);
       await projectStore.upsert(result.project);
       return c.json({ ok: true, reindexed: result.filesIndexed });
     } catch (err) {

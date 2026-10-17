@@ -11,7 +11,7 @@ services:
       - key: PORT
         value: 10000
       - key: APP_BASE_URL
-        value: https://git-voice.onrender.com
+        value: https://git-voice-sh7k.onrender.com
       # --- secrets: set these in the Render dashboard, not in this file ---
       - key: GOOGLE_API_KEY
         sync: false
@@ -34,6 +34,10 @@ services:
       - key: GITHUB_DEFAULT_REPO
         sync: false
       - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: GITHUB_OAUTH_CLIENT_ID
+        sync: false
+      - key: GITHUB_OAUTH_CLIENT_SECRET
         sync: false
       - key: DASHBOARD_TOKEN
         sync: false

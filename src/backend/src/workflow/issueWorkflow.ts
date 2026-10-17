@@ -34,6 +34,7 @@ import { synthesizeIssueHeuristically } from "../services/heuristic.js";
 import { buildIssueBody, buildSpokenText } from "../services/spoken.js";
 import { renderConfirmationAudio } from "../services/elevenlabs.js";
 import { createGitHubIssue } from "../services/github.js";
+import { sessionStore } from "../store/sessions.js";
 import { activeEmbedder } from "../services/embeddings.js";
 import { runWorkflow, type WorkflowStep } from "./engine.js";
 
@@ -350,8 +351,14 @@ export async function runIssuePipeline(
       name: STEP_NAMES.publish,
       run: async (c) => {
         const draft = c.draft!;
+        // Logged-in owner's token first (their private repos work), then the
+        // server-wide token, then gracefully degrade to a dashboard draft.
+        const userToken = project?.ownerLogin
+          ? await sessionStore.tokenForLogin(project.ownerLogin)
+          : undefined;
         const github = await createGitHubIssue({
           repoFullName: project?.repoFullName,
+          userToken,
           title: draft.title,
           body: draft.issueBody,
           labels: draft.labels

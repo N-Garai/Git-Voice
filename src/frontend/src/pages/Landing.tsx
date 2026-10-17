@@ -13,21 +13,22 @@ import { usePageReveals } from "../hooks/animations";
 import { navigate } from "../lib/router";
 import { PLANS } from "../data/plans";
 
-const LOADER_SESSION_KEY = "gv_booted_at";
-const LOADER_MAX_AGE_MS = 10 * 60 * 1000; // replay the boot loader only on fresh visits
+// Module-scope flag: resets on every full document load (new JS context) but
+// survives in-app SPA navigations. That is exactly the replay contract — the
+// boot loader plays fully on every hard refresh, and is skipped when the user
+// navigates away and back without reloading. (sessionStorage was wrong here:
+// it survives hard refresh in the same tab, so the loader played only once.)
+let loaderPlayedSinceLoad = false;
 
 export default function Landing(): JSX.Element {
   useScrollTheme();
-  const [booting, setBooting] = useState(() => {
-    const last = Number(sessionStorage.getItem(LOADER_SESSION_KEY) ?? 0);
-    return Date.now() - last > LOADER_MAX_AGE_MS;
-  });
+  const [booting, setBooting] = useState(() => !loaderPlayedSinceLoad);
   const [entered, setEntered] = useState(false);
   usePageReveals([booting]);
 
   useEffect(() => {
     if (booting) return;
-    sessionStorage.setItem(LOADER_SESSION_KEY, String(Date.now()));
+    loaderPlayedSinceLoad = true;
     // Let the shutter lift, then stage the hero entrance.
     const t = requestAnimationFrame(() => setEntered(true));
     return () => cancelAnimationFrame(t);

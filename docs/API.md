@@ -128,6 +128,46 @@ Machine-readable integration health for the dashboard's Settings tab:
     "configured": false, "activeMode": "…", "fallbackMode": "…" } ] }
 ```
 
+The `github-login` row reports whether the OAuth env keys are set.
+
+## Auth (GitHub login, optional)
+
+Free GitHub OAuth App. Logged-out users keep full access to public repos;
+logging in additionally unlocks the user's private repos for indexing and
+issue filing. Until `GITHUB_OAUTH_CLIENT_ID` + `GITHUB_OAUTH_CLIENT_SECRET`
+are set, these endpoints answer `404 not configured` (except `/api/auth/me`,
+which answers `{ "user": null }`) and the PAT flow keeps working unchanged.
+
+### `GET /api/auth/github`
+
+Starts the login: `302` redirect to `github.com/login/oauth/authorize`
+(`repo` scope, single-use `state`). Register the callback URL
+`<APP_BASE_URL>/api/auth/github/callback` on the OAuth App.
+
+### `GET /api/auth/github/callback?code=…&state=…`
+
+Exchanges the one-time code server-side (the secret never leaves the
+server), creates a session, sets the HttpOnly `gv_session` cookie, and
+redirects to `/dashboard/projects?github=connected` (or `?github=error`).
+
+### `GET /api/auth/me`
+
+`{ "user": { "login": "octocat", "id": 1 } }` or `{ "user": null }`.
+
+### `POST /api/auth/logout`
+
+Destroys the session and clears the cookie. `{ "ok": true }`.
+
+### `GET /api/repos`  *(login required)*
+
+The user's repos (private included), newest first (max 100):
+`{ "repos": [ { "fullName": "owner/repo", "isPrivate": true,
+"defaultBranch": "main" } ] }`. `401` when logged out.
+
+Token precedence for publishing/indexing: the logged-in project owner's
+OAuth token first, then the server `GITHUB_TOKEN`, then a dashboard draft
+(public indexing needs no token at all).
+
 ## Webhook
 
 ### `POST /api/webhook/gh-push`

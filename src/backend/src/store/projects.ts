@@ -21,7 +21,7 @@ export class ProjectStore {
     if (!this.pool) return;
     try {
       const res = await this.pool.query(
-        `SELECT id, name, repo_full_name, created_at, indexed_at, index_count, embedder_id, index_status
+        `SELECT id, name, repo_full_name, owner_login, created_at, indexed_at, index_count, embedder_id, index_status
          FROM git_voice_projects`
       );
       for (const r of res.rows as Array<Record<string, unknown>>) {
@@ -29,6 +29,7 @@ export class ProjectStore {
           id: r.id as string,
           name: r.name as string,
           repoFullName: (r.repo_full_name as string) ?? undefined,
+          ownerLogin: (r.owner_login as string) ?? undefined,
           createdAt: (r.created_at as Date).toISOString(),
           indexedAt: r.indexed_at ? (r.indexed_at as Date).toISOString() : undefined,
           indexCount: r.index_count as number,
@@ -55,16 +56,18 @@ export class ProjectStore {
     if (!this.pool) return;
     try {
       await this.pool.query(
-        `INSERT INTO git_voice_projects (id, name, repo_full_name, created_at, indexed_at, index_count, embedder_id, index_status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        `INSERT INTO git_voice_projects (id, name, repo_full_name, owner_login, created_at, indexed_at, index_count, embedder_id, index_status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          ON CONFLICT (id) DO UPDATE SET
            name = EXCLUDED.name, repo_full_name = EXCLUDED.repo_full_name,
+           owner_login = EXCLUDED.owner_login,
            indexed_at = EXCLUDED.indexed_at, index_count = EXCLUDED.index_count,
            embedder_id = EXCLUDED.embedder_id, index_status = EXCLUDED.index_status`,
         [
           project.id,
           project.name,
           project.repoFullName ?? null,
+          project.ownerLogin ?? null,
           new Date(project.createdAt),
           project.indexedAt ? new Date(project.indexedAt) : null,
           project.indexCount,

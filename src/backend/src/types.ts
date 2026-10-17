@@ -149,6 +149,8 @@ export interface Project {
   id: string;
   name: string;
   repoFullName?: string;
+  /** GitHub login that connected this project (set when created while logged in). */
+  ownerLogin?: string;
   createdAt: string;
   indexedAt?: string;
   indexCount: number;

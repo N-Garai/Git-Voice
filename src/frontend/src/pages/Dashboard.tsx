@@ -1,6 +1,6 @@
 /** Developer dashboard: issue log, projects + indexing, integration settings. */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type IssueRecordDto, type ProjectDto, type IntegrationDto } from "../lib/api";
+import { api, type IssueRecordDto, type ProjectDto, type IntegrationDto, type GitHubUser, type RepoListing } from "../lib/api";
 import { useRoute, navigate } from "../lib/router";
 import { GearLogo } from "../components/Chrome";
 import { useScrollReveal } from "../hooks/animations";
@@ -253,6 +253,9 @@ function ProjectsView(): JSX.Element {
   const [token, setToken] = useState(localStorage.getItem("gv_token") ?? "");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [ghUser, setGhUser] = useState<GitHubUser | null>(null);
+  const [ghRepos, setGhRepos] = useState<RepoListing[]>([]);
+  const [ghState, setGhState] = useState<"unknown" | "connected" | "logged-out" | "unconfigured">("unknown");
 
   const load = useCallback(async () => {
     const data = await api.projects();
@@ -261,6 +264,20 @@ function ProjectsView(): JSX.Element {
 
   useEffect(() => {
     void load().catch(() => setProjects([]));
+    // Post-OAuth landing flags (?github=connected / ?github=error).
+    const params = new URLSearchParams(window.location.search);
+    const flag = params.get("github");
+    if (flag === "connected" || flag === "error") {
+      setMessage(flag === "connected" ? "GitHub connected — pick one of your repos below." : "GitHub login failed — please try again.");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+    void api.me().then((m) => {
+      setGhUser(m.user);
+      setGhState(m.user ? "connected" : "logged-out");
+      if (m.user) {
+        void api.repos().then((r) => setGhRepos(r.repos)).catch(() => setGhRepos([]));
+      }
+    }).catch(() => setGhState("logged-out"));
   }, [load]);
 
   useEffect(() => {
@@ -296,6 +313,33 @@ function ProjectsView(): JSX.Element {
     } finally {
       setBusy(null);
     }
+  };
+
+  const loginGh = async () => {
+    // Probe first so an unconfigured server shows a hint instead of a raw error page.
+    try {
+      const res = await fetch("/api/auth/github", { redirect: "manual" });
+      if (res.status === 404) {
+        setGhState("unconfigured");
+        setMessage("GitHub login is not configured on this server yet (needs the OAuth env keys). Public repo links still work below.");
+        return;
+      }
+    } catch {
+      // Offline or blocked probe — try the navigation anyway.
+    }
+    window.location.href = "/api/auth/github";
+  };
+
+  const logoutGh = async () => {
+    try {
+      await api.logout();
+    } catch {
+      // The server clears the cookie regardless.
+    }
+    setGhUser(null);
+    setGhRepos([]);
+    setGhState("logged-out");
+    setMessage("Logged out of GitHub — public repo links still work.");
   };
 
   if (!projects) return <div className="empty"><span className="loading-dots"><i /><i /><i /></span></div>;
@@ -341,7 +385,43 @@ function ProjectsView(): JSX.Element {
       </div>
 
       <div className="card mt-24">
+        <h3 style={{ fontFamily: "var(--font-display)", marginBottom: 14 }}>GitHub</h3>
+        {ghState === "connected" && ghUser ? (
+          <div>
+            <p className="text-dim" style={{ fontSize: 14, marginBottom: 12 }}>
+              Connected as <strong className="mono">@{ghUser.login}</strong> — your repos (private included) are selectable when adding a project.
+            </p>
+            <button className="btn btn-ghost btn-sm" onClick={() => void logoutGh()}>Log out</button>
+          </div>
+        ) : (
+          <div>
+            <button className="btn btn-primary" onClick={() => void loginGh()}>Login with GitHub</button>
+            <p className="mono-xs text-faint mt-8">
+              Optional. Without login you can still use any <strong>public</strong> repo link below. Login unlocks your private repos too.
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="card mt-24">
         <h3 style={{ fontFamily: "var(--font-display)", marginBottom: 14 }}>Add a project</h3>
+        {ghRepos.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <select
+              className="coupon-input-field"
+              value=""
+              onChange={(e) => { if (e.target.value) setRepo(e.target.value); }}
+              aria-label="Pick one of your GitHub repositories"
+            >
+              <option value="">Pick one of your GitHub repos…</option>
+              {ghRepos.map((r) => (
+                <option key={r.fullName} value={r.fullName}>
+                  {r.fullName}{r.isPrivate ? " (private)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="grid-2" style={{ gap: 12 }}>
           <input
             className="coupon-input-field"
@@ -369,8 +449,8 @@ function ProjectsView(): JSX.Element {
           {busy === "create" ? "Creating…" : "Create project"}
         </button>
         <p className="mono-xs text-faint mt-8">
-          Creating a project with a repo lets the indexer build its architecture index from the
-          repository's public tarball.
+          Paste any public repo (owner/repo) — no login needed. Projects created while logged in file issues
+          and reindex with your GitHub access, so your private repos work too.
         </p>
       </div>
     </div>

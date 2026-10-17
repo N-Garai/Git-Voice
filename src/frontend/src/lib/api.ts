@@ -76,6 +76,17 @@ export interface IntegrationDto {
   fallbackMode: string;
 }
 
+export interface GitHubUser {
+  login: string;
+  id: number;
+}
+
+export interface RepoListing {
+  fullName: string;
+  isPrivate: boolean;
+  defaultBranch: string;
+}
+
 const base = "";
 
 async function get<T>(path: string): Promise<T> {
@@ -113,5 +124,8 @@ export const api = {
     get<{ matches: Array<{ filePath: string; componentName: string; score: number }> }>(
       `/api/projects/${projectId}/search?q=${encodeURIComponent(q)}`
     ),
-  settings: () => get<{ baseUrl: string; integrations: IntegrationDto[] }>("/api/settings")
+  settings: () => get<{ baseUrl: string; integrations: IntegrationDto[] }>("/api/settings"),
+  me: () => get<{ user: GitHubUser | null }>("/api/auth/me"),
+  repos: () => get<{ repos: RepoListing[] }>("/api/repos"),
+  logout: () => post<{ ok: boolean }>("/api/auth/logout")
 };

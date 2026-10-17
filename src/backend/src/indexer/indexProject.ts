@@ -88,22 +88,34 @@ export async function indexFileList(
 }
 
 /**
- * Download and index a public GitHub repository tarball. Uses the codeload
- * endpoint (no git binary, no API quota), capped for memory safety.
+ * Download and index a GitHub repository tarball.
+ *
+ * Logged-out (no token): uses the public codeload endpoint — no git binary,
+ * no API quota. Logged-in (OAuth token): uses the authenticated tarball
+ * endpoint first, so private repos the user can access index too.
+ * Capped for memory safety in both paths.
  */
 export async function indexGitHubRepo(
   project: Project,
   repoFullName: string,
-  index: VectorIndex
+  index: VectorIndex,
+  userToken?: string
 ): Promise<IndexRunResult & { branch: string }> {
   const { owner, repo } = parseRepo(repoFullName);
   let branch = "main";
   let gz: Buffer | null = null;
 
-  for (const candidate of ["main", "master"]) {
+  const branches: string[] = userToken ? await repoBranches(owner, repo, userToken) : ["main", "master"];
+  for (const candidate of branches) {
     try {
-      const res = await fetch(`https://codeload.github.com/${owner}/${repo}/tar.gz/refs/heads/${candidate}`, {
-        headers: { "User-Agent": "git-voice-indexer" },
+      const headers: Record<string, string> = { "User-Agent": "git-voice-indexer" };
+      const url = userToken
+        ? `https://api.github.com/repos/${owner}/${repo}/tarball/${candidate}`
+        : `https://codeload.github.com/${owner}/${repo}/tar.gz/refs/heads/${candidate}`;
+      if (userToken) headers.Authorization = `Bearer ${userToken}`;
+      const res = await fetch(url, {
+        headers,
+        redirect: "follow",
         signal: AbortSignal.timeout(60_000)
       });
       if (!res.ok) continue;
@@ -119,7 +131,13 @@ export async function indexGitHubRepo(
       // try the next branch
     }
   }
-  if (!gz) throw new Error(`Could not download a tarball for ${owner}/${repo} (is it public?)`);
+  if (!gz) {
+    throw new Error(
+      userToken
+        ? `Could not download ${owner}/${repo} (check access and branch)`
+        : `Could not download a tarball for ${owner}/${repo} (is it public?)`
+    );
+  }
 
   const tar = gunzipTar(gz);
   const entries: TarEntry[] = stripCommonPrefix(readTar(tar));
@@ -135,6 +153,30 @@ export async function indexGitHubRepo(
 
   const result = await buildEntries(project, files, index);
   return { ...result, branch };
+}
+
+/**
+ * Default branch first, then the common fallback — resolved via the API so
+ * private repos with a non-standard default branch index correctly.
+ */
+async function repoBranches(owner: string, repo: string, userToken: string): Promise<string[]> {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "git-voice-indexer"
+      },
+      signal: AbortSignal.timeout(20_000)
+    });
+    if (!res.ok) return ["main", "master"];
+    const data = (await res.json()) as { default_branch?: string };
+    const main = typeof data.default_branch === "string" ? data.default_branch : "main";
+    return [...new Set([main, "main", "master"])];
+  } catch {
+    return ["main", "master"];
+  }
 }
 
 export function parseRepo(input: string): { owner: string; repo: string } {
