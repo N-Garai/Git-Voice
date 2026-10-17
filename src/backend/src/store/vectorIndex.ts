@@ -216,21 +216,32 @@ CREATE TABLE IF NOT EXISTS git_voice_code_index (
   signature TEXT NOT NULL,
   embedding vector(${dim}) NOT NULL,
   embedder_id TEXT NOT NULL,
-  -- to_tsvector is only IMMUTABLE when its configuration is passed as a
-  -- regconfig constant. Passing the bare string literal makes the whole
-  -- expression STABLE, which newer PostgreSQL (16+) rejects inside a
-  -- GENERATED column with "generation expression is not immutable".
-  search_tsv tsvector GENERATED ALWAYS AS (
-    to_tsvector('english'::regconfig,
-      coalesce(file_path, '') || ' ' ||
-      coalesce(component_name, '') || ' ' ||
-      coalesce(route_path, '') || ' ' ||
-      coalesce(description, '') || ' ' ||
-      array_to_string(exported_symbols, ' ') || ' ' ||
-      array_to_string(error_enums, ' ')
-    )
-  ) STORED
+  search_tsv tsvector NOT NULL DEFAULT ''::tsvector
 );
+
+-- search_tsv is maintained by a trigger rather than a GENERATED column.
+-- Both array_to_string() and the two-argument to_tsvector() resolve to
+-- STABLE (not IMMUTABLE) for text[] output, so PostgreSQL refuses them in a
+-- GENERATED ALWAYS expression with "generation expression is not immutable".
+-- A BEFORE trigger has no such restriction and produces the same value.
+CREATE OR REPLACE FUNCTION git_voice_search_tsv() RETURNS trigger AS $fn$
+BEGIN
+  NEW.search_tsv := to_tsvector('english'::regconfig,
+    coalesce(NEW.file_path, '') || ' ' ||
+    coalesce(NEW.component_name, '') || ' ' ||
+    coalesce(NEW.route_path, '') || ' ' ||
+    coalesce(NEW.description, '') || ' ' ||
+    array_to_string(NEW.exported_symbols, ' ') || ' ' ||
+    array_to_string(NEW.error_enums, ' ')
+  );
+  RETURN NEW;
+END;
+$fn$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_gv_search_tsv ON git_voice_code_index;
+CREATE TRIGGER trg_gv_search_tsv
+  BEFORE INSERT OR UPDATE ON git_voice_code_index
+  FOR EACH ROW EXECUTE FUNCTION git_voice_search_tsv();
 
 CREATE INDEX IF NOT EXISTS idx_gv_code_index_project ON git_voice_code_index (project_id);
 CREATE INDEX IF NOT EXISTS idx_gv_code_index_hnsw ON git_voice_code_index USING hnsw (embedding vector_cosine_ops);
@@ -264,6 +275,57 @@ CREATE TABLE IF NOT EXISTS git_voice_sessions (
 CREATE INDEX IF NOT EXISTS idx_gv_sessions_login ON git_voice_sessions (github_login);
 `;
 
+/**
+ * Split a schema script into individual statements.
+ *
+ * A naive split on ";" corrupts plpgsql bodies (dollar-quoted blocks contain
+ * semicolons), so dollar-quoted segments are skipped as a unit. Leading comment
+ * lines are stripped from each statement and pure-comment fragments dropped, so
+ * a comment sitting above a CREATE TABLE cannot swallow the statement itself.
+ */
+function splitStatements(sql: string): string[] {
+  const stripLeadingComments = (s: string): string => {
+    const lines = s.split("\n");
+    while (lines.length && lines[0].trim().startsWith("--")) lines.shift();
+    return lines.join("\n").trim();
+  };
+
+  const out: string[] = [];
+  let buf = "";
+  let inDollar = false;
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    if (ch === "$") {
+      const tag = sql.slice(i).match(/^\$[a-zA-Z_]*\$/);
+      if (tag) {
+        if (!inDollar) {
+          inDollar = true;
+          buf += tag[0];
+          i += tag[0].length - 1;
+          continue;
+        }
+        if (sql.startsWith(tag[0], i)) {
+          inDollar = false;
+          buf += tag[0];
+          i += tag[0].length - 1;
+          continue;
+        }
+      }
+    }
+    if (ch === ";" && !inDollar) {
+      const stmt = stripLeadingComments(buf);
+      // Keep it when any non-comment line survives; drop comment-only chunks.
+      if (stmt && !/^(?:--[^\n]*\n?)+$/.test(stmt)) out.push(stmt);
+      buf = "";
+      continue;
+    }
+    buf += ch;
+  }
+  const last = stripLeadingComments(buf);
+  if (last && !/^(?:--[^\n]*\n?)+$/.test(last)) out.push(last);
+  return out;
+}
+
 export class PgVectorIndex implements VectorIndex {
   readonly backendName = "PostgreSQL + pgvector (HNSW) + tsvector, RRF-fused";
   private pool: pg.Pool;
@@ -285,10 +347,7 @@ export class PgVectorIndex implements VectorIndex {
       // newer column type) must not hide the rest of the schema, so statements
       // are retried individually and the specific failure is reported.
       const message = err instanceof Error ? err.message : String(err);
-      const statements = INDEX_SCHEMA_SQL(config.gemini.embeddingDim)
-        .split(";")
-        .map((s) => s.trim())
-        .filter((s) => s && !s.startsWith("--"));
+      const statements = splitStatements(INDEX_SCHEMA_SQL(config.gemini.embeddingDim));
       let firstFailure = message;
       for (const statement of statements) {
         try {

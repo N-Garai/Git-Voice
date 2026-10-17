@@ -349,23 +349,6 @@ export async function runIssuePipeline(
       }
     },
     {
-      stepId: "confirm",
-      name: STEP_NAMES.confirm,
-      run: async (c) => {
-        const draft = c.draft!;
-        const spokenText = buildSpokenText(draft.title, draft.suspectedFile, draft.severity);
-        const tts = await renderConfirmationAudio(spokenText);
-        return {
-          confirmation: {
-            spokenText,
-            voiceBackend: tts.backend,
-            audioBase64: tts.audioBase64,
-            audioMime: tts.audioMime
-          }
-        };
-      }
-    },
-    {
       stepId: "publish",
       name: STEP_NAMES.publish,
       run: async (c) => {
@@ -388,6 +371,29 @@ export async function runIssuePipeline(
           labels: draft.labels
         });
         return { github };
+      }
+    },
+    {
+      // Runs last so the spoken confirmation can name the real issue number.
+      stepId: "confirm",
+      name: STEP_NAMES.confirm,
+      run: async (c) => {
+        const draft = c.draft!;
+        const spokenText = buildSpokenText(
+          draft.title,
+          draft.suspectedFile,
+          draft.severity,
+          c.github ?? undefined
+        );
+        const tts = await renderConfirmationAudio(spokenText);
+        return {
+          confirmation: {
+            spokenText,
+            voiceBackend: tts.backend,
+            audioBase64: tts.audioBase64,
+            audioMime: tts.audioMime
+          }
+        };
       }
     }
   ];

@@ -305,7 +305,180 @@ function IssueCard({
   );
 }
 
-/* ------------------------------------------------------------------ projects */
+/* --------------------------------------------------------- report composer */
+
+/** Speak the confirmation out loud, falling back silently when unsupported. */
+function speak(text: string): void {
+  if (!("speechSynthesis" in window) || !text) return;
+  try {
+    const u = new SpeechSynthesisUtterance(text);
+    const voices = speechSynthesis.getVoices();
+    const match = voices.find((v) => v.lang === (navigator.language || "en").slice(0, 2));
+    if (match) u.voice = match;
+    u.rate = 1.02;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  } catch {
+    // Speech is a bonus; the visual confirmation still shows everything.
+  }
+}
+
+/**
+ * Voice-or-type report composer. Voice captures browser speech *and* a
+ * recording (multipart), so the server-side transcription station has real
+ * audio to work with — the same path the embeddable widget uses.
+ */
+function ReportComposer({
+  projectName,
+  busy,
+  onCancel,
+  onSubmit
+}: {
+  projectName: string;
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (text: string, audio?: Blob) => void;
+}): JSX.Element {
+  const [text, setText] = useState("");
+  const [recording, setRecording] = useState(false);
+  const [audio, setAudio] = useState<Blob | undefined>();
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const recognitionRef = useRef<{ stop: () => void } | null>(null);
+  const baseRef = useRef("");
+
+  const toggleRecord = async () => {
+    if (recording) {
+      recorderRef.current?.stop();
+      recognitionRef.current?.stop();
+      setRecording(false);
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((t) =>
+        MediaRecorder.isTypeSupported?.(t)
+      );
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        const type = rec.mimeType || "audio/webm";
+        setAudio(new Blob(chunksRef.current, { type }));
+        stream.getTracks().forEach((t) => t.stop());
+      };
+      rec.start(250);
+      recorderRef.current = rec;
+      setRecording(true);
+    } catch {
+      setText((t) => t || "Microphone unavailable — type the report instead.");
+      return;
+    }
+
+    // Live browser speech-to-text fills the same box as typing.
+    const SR =
+      (window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike }).SpeechRecognition ??
+      (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognitionLike }).webkitSpeechRecognition;
+    if (!SR) return;
+    try {
+      const r = new SR();
+      r.lang = navigator.language || "en-US";
+      baseRef.current = text;
+      r.onresult = (e: SpeechRecognitionEventLike) => {
+        let interim = "";
+        let final = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const res = e.results[i];
+          if (res.isFinal) final += res[0].transcript + " ";
+          else interim += res[0].transcript;
+        }
+        if (final) {
+          setText(`${baseRef.current} ${final}`.trim());
+          baseRef.current = `${baseRef.current} ${final}`.trim();
+        }
+      };
+      r.onend = () => setRecording((v) => (recorderRef.current ? v : false));
+      r.start();
+      recognitionRef.current = r as unknown as { stop: () => void };
+    } catch {
+      // Recording still works without live transcription.
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(4,7,11,0.78)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+        padding: 20
+      }}
+      onClick={onCancel}
+    >
+      <div
+        className="card"
+        style={{ maxWidth: 560, width: "100%" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 style={{ fontFamily: "var(--font-display)", marginBottom: 4 }}>New voice report</h3>
+        <p className="mono-xs text-faint" style={{ marginBottom: 16 }}>
+          {projectName} — talk or type, whichever is easier.
+        </p>
+
+        <textarea
+          className="coupon-input-field"
+          style={{ minHeight: 110, width: "100%", padding: 12, resize: "vertical" }}
+          placeholder="What's wrong? e.g. “the bird makes no sound when it hits a pipe”"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 14, flexWrap: "wrap" }}>
+          <button
+            className={`btn ${recording ? "btn-primary" : "btn-ghost"} btn-sm`}
+            onClick={() => void toggleRecord()}
+            disabled={busy}
+          >
+            {recording ? "● Stop recording" : "🎙 Speak it instead"}
+          </button>
+          {audio && <span className="mono-xs text-cyan">audio captured ✓</span>}
+          <span style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
+            <button className="btn btn-ghost btn-sm" onClick={onCancel} disabled={busy}>Cancel</button>
+            <button
+              className="btn btn-primary btn-sm"
+              disabled={busy || !text.trim()}
+              onClick={() => onSubmit(text.trim(), audio)}
+            >
+              {busy ? "Filing…" : "Send report"}
+            </button>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface SpeechRecognitionAlternativeLike { transcript: string }
+interface SpeechRecognitionResultLike { isFinal: boolean; 0: SpeechRecognitionAlternativeLike }
+interface SpeechRecognitionEventLike {
+  resultIndex: number;
+  results: { length: number; [i: number]: SpeechRecognitionResultLike };
+}
+interface SpeechRecognitionLike {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((e: SpeechRecognitionEventLike) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
+
+/* ------------------------------------------------------------------- projects */
 
 function ProjectsView(): JSX.Element {
   const [projects, setProjects] = useState<ProjectDto[] | null>(null);
@@ -319,6 +492,7 @@ function ProjectsView(): JSX.Element {
   const [ghUser, setGhUser] = useState<GitHubUser | null>(null);
   const [ghRepos, setGhRepos] = useState<RepoListing[]>([]);
   const [ghState, setGhState] = useState<"unknown" | "connected" | "logged-out" | "unconfigured">("unknown");
+  const [composer, setComposer] = useState<{ open: boolean; projectId: string; projectName: string } | null>(null);
 
   const [loadError, setLoadError] = useState("");
   const load = useCallback(async () => {
@@ -430,36 +604,69 @@ function ProjectsView(): JSX.Element {
     }
   };
 
-  const fileHere = async (projectId: string, repoOverride: string) => {
-    const text = window.prompt(
-      "Describe the problem in your own words (the machine turns it into an issue):"
-    );
-    if (!text || !text.trim()) return;
+  const submitReport = async (projectId: string, repoOverride: string, text: string, audio?: Blob) => {
     setBusy(projectId);
     setMessage("");
     try {
-      await api.submitReport({
-        projectId,
-        transcript: text.trim(),
-        repoFullName: repoOverride || undefined,
-        telemetry: {
-          url: window.location.href,
-          route: window.location.pathname,
-          viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio },
-          userAgent: navigator.userAgent,
-          language: navigator.language,
-          consoleLogs: [],
-          errors: [],
-          clicks: []
-        }
-      });
-      setMessage("Report filed — open the Issues tab to see the drafted issue.");
+      const telemetry = {
+        url: window.location.href,
+        route: window.location.pathname,
+        viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio },
+        userAgent: navigator.userAgent,
+        language: navigator.language,
+        consoleLogs: [] as Array<{ level: string; text: string }>,
+        errors: [] as Array<{ message: string }>,
+        clicks: [] as Array<{ selector: string }>
+      };
+
+      // With audio we must use multipart so the recording reaches the server;
+      // otherwise the JSON path is simpler and always available.
+      let created: { issue: IssueRecordDto };
+      if (audio && audio.size > 0) {
+        const form = new FormData();
+        form.set("projectId", projectId);
+        form.set("transcript", text);
+        form.set("transcriptSource", text.trim() ? "browser-speech" : "typed-report");
+        form.set("telemetry", JSON.stringify(telemetry));
+        if (repoOverride.trim()) form.set("repoFullName", repoOverride.trim());
+        form.set("audio", audio, "report.webm");
+        const res = await fetch("/api/issue", { method: "POST", body: form, credentials: "include" });
+        const data = (await res.json().catch(() => ({}))) as { issue?: IssueRecordDto; error?: string };
+        if (!res.ok || !data.issue) throw new Error(data.error ?? `Request failed (${res.status})`);
+        created = data as { issue: IssueRecordDto };
+      } else {
+        created = await api.submitReport({
+          projectId,
+          transcript: text,
+          repoFullName: repoOverride.trim() || undefined,
+          telemetry
+        });
+      }
+
+      const spoken = created.issue.result?.confirmation.spokenText;
+      if (spoken) speak(spoken);
+      setMessage(
+        created.issue.result?.github.issueUrl
+          ? `Report filed — ${created.issue.result.github.issueUrl}`
+          : "Report filed as a draft — open the Issues tab to review it."
+      );
       await load();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }
+  };
+
+  const fileHere = (projectId: string) => {
+    setComposer({ open: true, projectId, projectName: projectNameById[projectId] ?? projectId });
+  };
+
+  const confirmCompose = async (text: string, audio?: Blob) => {
+    if (!composer) return;
+    const repoEl = document.getElementById(`repo-override-${composer.projectId}`) as HTMLInputElement | null;
+    await submitReport(composer.projectId, repoEl?.value ?? "", text, audio);
+    setComposer(null);
   };
 
   if (!projects) return <div className="empty"><span className="loading-dots"><i /><i /><i /></span></div>;
@@ -475,6 +682,8 @@ function ProjectsView(): JSX.Element {
   }
 
   const baseUrl = window.location.origin;
+  const projectNameById: Record<string, string> = {};
+  for (const p of projects) projectNameById[p.id] = p.name;
 
   return (
     <div>
@@ -530,10 +739,7 @@ function ProjectsView(): JSX.Element {
               <button
                 className="btn btn-primary btn-sm"
                 disabled={busy === p.id}
-                onClick={() => {
-                  const el = document.getElementById(`repo-override-${p.id}`) as HTMLInputElement | null;
-                  void fileHere(p.id, el?.value.trim() ?? "");
-                }}
+                onClick={() => fileHere(p.id)}
               >
                 File a report here
               </button>
@@ -611,6 +817,15 @@ function ProjectsView(): JSX.Element {
           private repos work too — issues are always filed under your own GitHub identity.
         </p>
       </div>
+
+      {composer && (
+        <ReportComposer
+          projectName={composer.projectName}
+          busy={busy === composer.projectId}
+          onCancel={() => setComposer(null)}
+          onSubmit={(text, audio) => void confirmCompose(text, audio)}
+        />
+      )}
     </div>
   );
 }

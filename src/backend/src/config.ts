@@ -34,7 +34,7 @@ export const config = {
 
   gemini: {
     apiKey: str("GOOGLE_API_KEY"),
-    draftModelId: str("GEMMA_MODEL_ID", "gemma-3-27b-it"),
+    draftModelId: str("GEMMA_MODEL_ID", "gemma-4-26b-a4b-it"),
     transcribeModelId: str("TRANSCRIBE_MODEL_ID", "gemini-2.5-flash"),
     embeddingModelId: str("EMBEDDING_MODEL_ID", "gemini-embedding-001"),
     embeddingDim: EMBEDDING_DIM

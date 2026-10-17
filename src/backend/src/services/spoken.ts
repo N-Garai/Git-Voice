@@ -96,15 +96,30 @@ export function buildIssueBody(
     .join("\n");
 }
 
-export function buildSpokenText(title: string, suspectedFile: string, severity: string): string {
+export function buildSpokenText(
+  title: string,
+  suspectedFile: string,
+  severity: string,
+  github?: { pushed?: boolean; issueUrl?: string; issueNumber?: number }
+): string {
   const cleanTitle = title
     .replace(/\(blocked\)/gi, "")
     .replace(/[`*_#]/g, "")
     .replace(/\s+/g, " ")
     .trim();
   const fileName = suspectedFile.split("/").pop() ?? suspectedFile;
-  return (
-    `Thanks! Your report is in. It's logged as: ${cleanTitle}. ` +
-    `Our engineer will look at ${fileName}. It's marked ${severity} priority.`
-  );
+
+  // Exactly two spoken lines: what is wrong + how it is being handled. Clients
+  // hearing this should never need to read the issue to know what happens next.
+  const line1 = `${cleanTitle}. It's in ${fileName}, marked ${severity} priority.`;
+
+  let line2: string;
+  if (github?.pushed) {
+    const where = github.issueNumber ? `issue number ${github.issueNumber}` : "a new issue";
+    line2 = `Your developer has it as ${where} on GitHub and is fixing it now.`;
+  } else {
+    line2 = "Your developer has it in their dashboard and will pick it up from there.";
+  }
+
+  return `${line1} ${line2}`;
 }
