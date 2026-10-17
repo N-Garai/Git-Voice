@@ -25,7 +25,19 @@ export function llmConfigured(): boolean {
   return Boolean(config.gemini.apiKey);
 }
 
-async function generate(modelId: string, parts: GeminiPart[], jsonMode: boolean): Promise<string> {
+/**
+ * Free-tier model latency is unpredictable (cold starts, queued requests), so a
+ * generous per-call budget plus one retry keeps a slow response from silently
+ * downgrading a good draft to the offline engine.
+ */
+const MODEL_TIMEOUT_MS = 70_000;
+
+async function generateOnce(
+  modelId: string,
+  parts: GeminiPart[],
+  jsonMode: boolean,
+  timeoutMs: number
+): Promise<string> {
   const key = config.gemini.apiKey;
   if (!key) throw new Error("No model API key configured");
 
@@ -39,17 +51,31 @@ async function generate(modelId: string, parts: GeminiPart[], jsonMode: boolean)
         ...(jsonMode ? { responseMimeType: "application/json" } : {})
       }
     }),
-    signal: AbortSignal.timeout(45_000)
+    signal: AbortSignal.timeout(timeoutMs)
   });
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`Model API error ${res.status}: ${body.slice(0, 300)}`);
   }
+
   const data = (await res.json()) as GeminiResponse;
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
   if (!text.trim()) throw new Error("Model returned an empty completion");
   return text;
+}
+
+async function generate(modelId: string, parts: GeminiPart[], jsonMode: boolean): Promise<string> {
+  try {
+    return await generateOnce(modelId, parts, jsonMode, MODEL_TIMEOUT_MS);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const transient = /timeout|aborted|429|500|502|503|504/i.test(message);
+    if (!transient) throw err;
+    // One shorter retry: transient queueing usually clears immediately.
+    await new Promise((r) => setTimeout(r, 1200));
+    return generateOnce(modelId, parts, jsonMode, 35_000);
+  }
 }
 
 /**

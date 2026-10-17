@@ -307,26 +307,26 @@ export async function runIssuePipeline(
                   url: c.telemetry.url,
                   viewport: c.telemetry.viewport,
                   userAgent: c.telemetry.userAgent,
-                  consoleLogs: c.telemetry.consoleLogs.slice(-25),
-                  errors: c.telemetry.errors.slice(-10),
-                  clicks: c.telemetry.clicks.slice(-10)
+                  consoleLogs: c.telemetry.consoleLogs.slice(-12).map((l) => `${l.level}: ${l.text.slice(0, 160)}`),
+                  errors: c.telemetry.errors.slice(-6).map((e) => e.message.slice(0, 200)),
+                  clicks: c.telemetry.clicks.slice(-8).map((k) => k.selector)
                 },
                 null,
                 1
               ),
               correlations: c.correlations,
-              matchesJson: JSON.stringify(
-                c.matches.map((m) => ({
-                  file: m.filePath,
-                  component: m.componentName,
-                  exports: m.exportedSymbols,
-                  errorCodes: m.errorEnums,
-                  route: m.routePath,
-                  description: m.description
-                })),
-                null,
-                1
-              )
+matchesJson: JSON.stringify(
+              c.matches.map((m) => ({
+                file: m.filePath,
+                component: m.componentName,
+                exports: m.exportedSymbols.slice(0, 6),
+                errorCodes: m.errorEnums.slice(0, 6),
+                route: m.routePath,
+                description: m.description.slice(0, 180)
+              })),
+              null,
+              1
+            )
             });
             draft = coerceDraft(parsed, heuristic);
             c.drafterLabel = model;
