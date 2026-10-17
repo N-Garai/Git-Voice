@@ -22,17 +22,32 @@ export interface FileSignature {
 }
 
 const TEXT_EXTENSIONS = [
-  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte",
-  ".css", ".scss", ".sass", ".less", ".html", ".htm", ".astro"
+  // Web front end
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro",
+  ".css", ".scss", ".sass", ".less", ".html", ".htm",
+  // Backend / server
+  ".py", ".java", ".go", ".rs", ".rb", ".php", ".cs", ".kt", ".swift",
+  ".scala", ".ex", ".exs", ".hs", ".lua", ".dart", ".sql", ".graphql", ".proto",
+  // Shell + config + prose that describe intent
+  ".sh", ".bash", ".zsh", ".yml", ".yaml", ".toml", ".env.example",
+  ".md", ".mdx", ".json"
 ];
 
-const SKIP_DIRS = [
-  "node_modules", ".git", ".next", "dist", "build", "out", "coverage",
-  ".turbo", ".cache", "vendor", "__pycache__", ".venv", "target"
-];
+/** Documentation/manifest files carry intent but no symbols. */
+const PROSE_EXTENSIONS = new Set([".md", ".mdx", ".json", ".yml", ".yaml", ".toml", ".sh", ".bash", ".zsh", ".env.example"]);
 
 const SKIP_FILES = [
-  "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb"
+  "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb",
+  // Large machine-generated data that adds noise, not signal.
+  "composer.lock", "gemfile.lock", "cargo.lock", "go.sum", "poetry.lock",
+  "tsconfig.json", "jsconfig.json"
+];
+
+/** Directories whose contents are generated or vendored, never hand-written. */
+const SKIP_DIRS = [
+  "node_modules", ".git", ".next", "dist", "build", "out", "coverage",
+  ".turbo", ".cache", "vendor", "__pycache__", ".venv", "venv", "target",
+  "bin", "obj", ".idea", ".gradle", "migrations", "fixtures", "__snapshots__"
 ];
 
 const BINARY_EXTENSIONS = [
@@ -65,16 +80,38 @@ export function extractSignature(filePath: string, source: string): FileSignatur
   const componentName = baseComponentName(filePath);
   const isStyle = ext === ".css" || ext === ".scss" || ext === ".sass" || ext === ".less";
   const isMarkup = ext === ".html" || ext === ".htm";
+  const isProse = PROSE_EXTENSIONS.has(ext);
 
-  // Exported symbols ---------------------------------------------------------
+// Exported symbols ---------------------------------------------------------
   const exportedSymbols: string[] = [];
-  if (!isStyle && !isMarkup) {
+  if (!isStyle && !isMarkup && !isProse) {
     const patterns = [
+      // ES modules / TypeScript
       /export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z0-9_$]+)/g,
       /export\s+(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z0-9_$]+)/g,
       /export\s+(?:const|let|var)\s+([A-Za-z0-9_$]+)/g,
       /export\s+default\s+([A-Za-z0-9_$]+)/g,
-      /export\s*\{([^}]+)\}/g
+      /export\s*\{([^}]+)\}/g,
+      // Python
+      /^\s*(?:async\s+)?def\s+([A-Za-z0-9_]+)/gm,
+      /^\s*class\s+([A-Za-z0-9_]+)/gm,
+      // Go
+      /^func\s+(?:\([^)]*\)\s*)?([A-Za-z0-9_]+)/gm,
+      /^type\s+([A-Za-z0-9_]+)/gm,
+      // Rust
+      /^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)/gm,
+      /^\s*(?:pub\s+)?(?:struct|enum|trait|type)\s+([A-Za-z0-9_]+)/gm,
+      // Java / Kotlin / C# / Scala
+      /^\s*(?:public|private|protected|internal|open|final|abstract|static|\s)*\b(?:class|interface|enum|record|object)\s+([A-Za-z0-9_]+)/gm,
+      // Ruby / PHP
+      /^\s*def\s+([A-Za-z0-9_?!]+)/gm,
+      /^\s*(?:abstract\s+)?class\s+([A-Za-z0-9_]+)/gm,
+      /^\s*(?:public\s+|private\s+|protected\s+)?function\s+([A-Za-z0-9_]+)/gm,
+      // Elixir / Haskell / Lua / Dart / Swift
+      /^\s*defmodule\s+([A-Za-z0-9_.]+)/gm,
+      /^\s*[a-z_]+\s+([A-Za-z0-9_']+)\s+::/gm,
+      /^\s*(?:local\s+)?function\s+([A-Za-z0-9_.:]+)/gm,
+      /^\s*(?:abstract\s+)?class\s+([A-Za-z0-9_]+)/gm
     ];
     for (const pattern of patterns) {
       for (const m of source.matchAll(pattern)) {
@@ -118,11 +155,22 @@ export function extractSignature(filePath: string, source: string): FileSignatur
   }
 
   // Route literals ---------------------------------------------------------------
-  const routes: string[] = [];
-  const routePatterns = [
-    /(?:path|route|href|to)\s*[=:"']\s*["'`](\/[a-zA-Z0-9_\-/:.]*)["'`]/g,
-    /["'`](\/(?:api|app|checkout|cart|settings|auth|account|onboarding|dashboard|billing|profile|admin|login|signup|search)(?:\/[a-zA-Z0-9_\-/:.]*)?)["'`]/g
-  ];
+const routes: string[] = [];
+    const routePatterns = [
+      // Front-end: JSX/Router attributes and literal paths.
+      /(?:path|route|href|to)\s*[=:"']\s*["'`](\/[a-zA-Z0-9_\-/:.]*)["'`]/g,
+      /["'`](\/(?:api|app|checkout|cart|settings|auth|account|onboarding|dashboard|billing|profile|admin|login|signup|search)(?:\/[a-zA-Z0-9_\-/:.]*)?)["'`]/g,
+      // Backend routers.
+      /(?:app|router|api)\.(?:get|post|put|patch|delete|use)\s*\(\s*["'`](\/[a-zA-Z0-9_\-/:.{}]*)["'`]/g,
+      /@(?:app|router|bp|blueprint)\.route\s*\(\s*["'`](\/[a-zA-Z0-9_\-/:.{}]*)["'`]/g,
+      /path\s*\(?\s*["'`](\/[a-zA-Z0-9_\-/:.{}]*)["'`]/g,
+      /(?:get|post|put|delete)\s+["'`](\/[a-zA-Z0-9_\-/:.{}]*)["'`]/g,
+      /@(?:Get|Post|Put|Delete|Patch|Request)Mapping\s*\(\s*(?:value\s*=\s*)?["'`](\/[a-zA-Z0-9_\-/:.{}]*)["'`]/g,
+      /(?:http\.)?HandleFunc\s*\(\s*["`](\/[a-zA-Z0-9_\-/:.{}]*)["`]/g,
+      /^\s*[a-z]+\s+["'`](\/[a-zA-Z0-9_\-/:.{}]*)["'`]/gm,
+      // Docs and API surfaces.
+      /["'`](\/(?:v\d+|graphql|health|status|webhooks?)(?:\/[a-zA-Z0-9_\-/:.]*)?)["'`]/g
+    ];
   for (const pattern of routePatterns) {
     for (const m of source.matchAll(pattern)) {
       const route = m[1].replace(/[:*].*$/, "") || "/";

@@ -58,7 +58,38 @@ Two interchangeable embedders; every stored entry records which produced it:
   configuration, is fast enough for the largest supported repo, and never touches a
   network.
 
-## Retrieval (`src/backend/src/store/vectorIndex.ts`)
+## Which files get indexed
+
+The index covers **web front end and back end**, not just JavaScript:
+
+| Group | Extensions |
+|---|---|
+| Front end | `.ts .tsx .js .jsx .mjs .cjs .vue .svelte .astro .html .htm .css .scss .sass .less` |
+| Back end | `.py .java .go .rs .rb .php .cs .kt .swift .scala .ex .exs .hs .lua .dart .sql .graphql .proto` |
+| Config / prose | `.sh .bash .zsh .yml .yaml .toml .json .md .mdx` |
+
+Prose and config files are indexed for **intent** (`README.md` describing the
+coupon flow is useful evidence) but contribute no symbols.
+
+Symbol extraction is language-aware — `def`/`class` in Python, `func`/`type` in Go,
+`fn`/`struct` in Rust, `class`/`interface`/`record` in JVM and .NET, `def`/`class` in
+Ruby and PHP. Route detection also covers backend routers (Express, Flask, Django,
+FastAPI, Spring annotations, Go `HandleFunc`, Rails), so "the checkout endpoint" can
+match `/api/checkout` or `/checkout/submit` as readily as a JSX `<Route>`.
+
+### Limits
+
+| Limit | Value | Reason |
+|---|---|---|
+| Files indexed per run | 800 | Embedding cost against the free tier quota |
+| Download tarball | 40 MB | Memory safety on a 512 MB container |
+| Single file | 200 KB | Skips minified bundles and generated code |
+| Skipped directories | `node_modules`, `dist`, `build`, `target`, `vendor`, `venv`, `__pycache__`, migrations, fixtures, and more | Generated or vendored code is noise |
+| Skipped files | all lockfiles, `go.sum`, `tsconfig.json`, `composer.lock`, `cargo.lock` | Machine-generated |
+
+A 5 000-file monorepo therefore indexes its first 800 eligible files. That is a
+deliberate tradeoff: embedding every file would exhaust the free embedding quota.
+The 1 200-file path is covered by a regression test.
 
 Hybrid search, fused with Reciprocal Rank Fusion — the same semantics on two backends:
 
@@ -90,3 +121,5 @@ GET /api/projects/:id/search?q=coupon%20checkout&route=/checkout
 
 During filing, the pipeline builds the query from the transcript, captured error and
 console texts, and click labels; the report's own route is passed as a hard hint.
+
+## Retrieval (src/backend/src/store/vectorIndex.ts)

@@ -85,7 +85,7 @@ describe("repository shape coverage", () => {
     expect(paths).toHaveLength(3);
   });
 
-  it("skips dependency, build, binary and non-web stacks", () => {
+  it("skips dependency, build, binary and generated trees", () => {
     const paths = indexedPaths([
       { path: "r/src/app.js", content: "1" },
       { path: "r/node_modules/lib/index.js", content: "1" },
@@ -93,12 +93,25 @@ describe("repository shape coverage", () => {
       { path: "r/build/out.js", content: "1" },
       { path: "r/assets/logo.png", content: "1" },
       { path: "r/package-lock.json", content: "{}" },
-      { path: "r/docs/guide.md", content: "# docs" },
-      { path: "r/main.py", content: "print(1)" },
-      { path: "r/Main.java", content: "class Main{}" },
-      { path: "r/lib.rs", content: "fn main(){}" }
+      { path: "r/go.sum", content: "h1:" },
+      { path: "r/tsconfig.json", content: "{}" }
     ]);
     expect(paths).toEqual(["src/app.js"]);
+  });
+
+  it("indexes backend languages, not just front end", () => {
+    const paths = indexedPaths([
+      { path: "svc/handlers.py", content: "def handle(): pass" },
+      { path: "svc/Order.java", content: "class OrderService {}" },
+      { path: "svc/server.go", content: "func main() {}" },
+      { path: "svc/lib.rs", content: "pub fn run() {}" },
+      { path: "svc/model.rb", content: "class User\nend" },
+      { path: "svc/Repo.php", content: "class Repo {}" },
+      { path: "svc/Service.cs", content: "class Service {}" },
+      { path: "README.md", content: "# Docs" },
+      { path: "config.yml", content: "a: 1" }
+    ]);
+    expect(paths).toHaveLength(9);
   });
 
   it("skips oversized files but keeps the rest of the repo", () => {
