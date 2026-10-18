@@ -24,6 +24,8 @@ import { DEMO_PROJECT_ID, DEMO_PROJECT_NAME } from "./indexer/fixtures.js";
 import { activeEmbedder } from "./services/embeddings.js";
 import { llmConfigured } from "./services/gemini.js";
 import { sessionStore } from "./store/sessions.js";
+import { billingStore } from "./billing/billing.js";
+import { preferenceStore } from "./store/preferences.js";
 
 async function main(): Promise<void> {
   const index = await createVectorIndex();
@@ -31,6 +33,10 @@ async function main(): Promise<void> {
   // Restore report records before serving, so a restart or free-tier sleep
   // never empties the dashboard.
   await issueStore.hydrate();
+  // Plan profiles + receipts, so a purchased tier survives a restart.
+  await billingStore.hydrate();
+  // Per-account preferences edited from the dashboard.
+  await preferenceStore.hydrate();
 
   // Seed the demo storefront so the machine is explorable immediately.
   let demo = projectStore.get(DEMO_PROJECT_ID);
@@ -82,6 +88,8 @@ async function main(): Promise<void> {
     await projectStore.close().catch(() => {});
     await issueStore.close().catch(() => {});
     await sessionStore.close().catch(() => {});
+    await billingStore.close().catch(() => {});
+    await preferenceStore.close().catch(() => {});
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

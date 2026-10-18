@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { apiRoutes } from "./api.js";
 import { sessionStore } from "../store/sessions.js";
 import { projectStore, makeProject } from "../store/projects.js";
+import { billingStore } from "../billing/billing.js";
 import type { VectorIndex } from "../store/vectorIndex.js";
 
 const DEMO = "prj_demo_storefront";
@@ -52,6 +53,18 @@ async function seedDemo(): Promise<void> {
   await projectStore.upsert(makeProject({ id: DEMO, name: "Demo storefront" }));
 }
 
+/**
+ * Isolation tests care about tenancy, not plans. Give the account a plan with
+ * headroom and clear its previous projects so the per-plan project allowance never
+ * interferes with what is being asserted.
+ */
+async function freshAccount(login: string): Promise<void> {
+  billingStore.reset(login);
+  for (const p of projectStore.list().filter((x) => x.ownerLogin?.toLowerCase() === login.toLowerCase())) {
+    await projectStore.remove(p.id);
+  }
+}
+
 const VALID_TELEMETRY = {
   url: "https://x",
   route: "/",
@@ -71,6 +84,8 @@ describe("cross-user isolation", () => {
     // Each test gets a clean in-memory app + session table.
     app = apiRoutes(stubIndex());
     await seedDemo();
+    await freshAccount("alice");
+    await freshAccount("bob");
     alice = await signIn("alice", 1);
     bob = await signIn("bob", 2);
   });
@@ -203,6 +218,7 @@ describe("project deletion purges everything", () => {
   beforeEach(async () => {
     app = apiRoutes(stubIndex());
     await seedDemo();
+    await freshAccount("alice");
     alice = await signIn("alice", 1);
     removed = [];
   });

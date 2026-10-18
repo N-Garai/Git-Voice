@@ -5,6 +5,8 @@ export interface Plan {
   tier: string;
   price: string;
   per: string;
+  /** Whole cents, mirrors the server-side price so checkout never re-parses text. */
+  amountCents: number;
   featured: boolean;
   cta: string;
   to: string;
@@ -19,12 +21,13 @@ export const PLANS: Plan[] = [
     tier: "Hobby",
     price: "$0",
     per: "forever",
+    amountCents: 0,
     featured: false,
     cta: "Start free",
     to: "/demo",
-    tagline: "One staging site, public repos, no account setup.",
+    tagline: "One client project, public repos, no account setup.",
     features: [
-      "1 staging link",
+      "1 project",
       "Public repositories",
       "Browser voice confirmation",
       "Deterministic issue drafting",
@@ -35,13 +38,14 @@ export const PLANS: Plan[] = [
     id: "freelancer",
     tier: "Freelancer",
     price: "$15",
-    per: "per month, per staging site",
+    per: "per month, per project",
+    amountCents: 1500,
     featured: true,
     cta: "Wire your staging site",
     to: "/demo",
-    tagline: "Private repos and model-drafted issues for one client site.",
+    tagline: "Private repos and model-drafted issues for one client project.",
     features: [
-      "1 staging link per paid slot",
+      "1 project per paid slot",
       "Private repositories",
       "Premium synthesized confirmation voice",
       "Model-drafted issues with file matching",
@@ -52,13 +56,14 @@ export const PLANS: Plan[] = [
     id: "agency",
     tier: "Agency",
     price: "$60",
-    per: "per month · 4 staging links",
+    per: "per month · 10 projects",
+    amountCents: 6000,
     featured: false,
     cta: "Talk to us",
     to: "/demo",
-    tagline: "Four client sites, each with its own repo and sign-in.",
+    tagline: "Ten client projects, each with its own repo and sign-in.",
     features: [
-      "4 staging links included",
+      "10 projects included",
       "Separate repository per client",
       "Sign-in per client, issues authored by you",
       "Everything in Freelancer",
@@ -81,7 +86,7 @@ export interface ComparisonRow {
 }
 
 export const COMPARISON: ComparisonRow[] = [
-  { feature: "Staging links", hobby: "1", freelancer: "1 per slot", agency: "4" },
+  { feature: "Projects", hobby: "1", freelancer: "1 per slot", agency: "10" },
   { feature: "Public repositories", hobby: "Included", freelancer: "Included", agency: "Included" },
   { feature: "Private repositories", hobby: null, freelancer: "Included", agency: "Included" },
   { feature: "Spoken confirmation", hobby: "Browser voice", freelancer: "Premium voice", agency: "Premium voice" },
@@ -94,8 +99,8 @@ export const COMPARISON: ComparisonRow[] = [
 
 export const FAQ: Array<{ q: string; a: string }> = [
   {
-    q: "What counts as a staging link?",
-    a: "One embeddable widget installation on one client site. Each link is an independent project with its own repository, its own architecture index, and its own issue log — so clients never see each other's work."
+    q: "What counts as a project?",
+    a: "One project is one client site with the widget installed. Each project keeps its own repository, its own architecture index, and its own issue log — so one client's reports never appear in another's repo."
   },
   {
     q: "Do I need to configure anything to start?",

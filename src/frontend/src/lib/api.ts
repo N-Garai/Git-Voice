@@ -85,12 +85,63 @@ export interface IntegrationDto {
 export interface GitHubUser {
   login: string;
   id: number;
+  avatarUrl: string;
+  profileUrl: string;
 }
 
 export interface RepoListing {
   fullName: string;
   isPrivate: boolean;
   defaultBranch: string;
+}
+
+export type Tier = "hobby" | "freelancer" | "agency";
+
+export interface BillingProfile {
+  login: string;
+  tier: Tier;
+  currentPeriodStart?: string;
+  currentPeriodEnd?: string;
+  cancelAtPeriodEnd: boolean;
+  updatedAt: string;
+}
+
+export interface Entitlement {
+  id: string;
+  label: string;
+  included: boolean;
+}
+
+export interface Invoice {
+  id: string;
+  number: string;
+  login: string;
+  tier: Tier;
+  planLabel: string;
+  amountCents: number;
+  currency: string;
+  method: "card" | "upi";
+  instrument: string;
+  issuedAt: string;
+  periodStart: string;
+  periodEnd: string;
+  status: "paid";
+}
+
+export interface BillingState {
+  profile: BillingProfile;
+  entitlements: Entitlement[];
+  invoices: Invoice[];
+  projectLimit: number;
+}
+
+export interface Preferences {
+  login: string;
+  voiceConfirmation: boolean;
+  draftReview: boolean;
+  includeTelemetry: boolean;
+  transcriptPreference: "auto" | "voice" | "typed";
+  updatedAt: string;
 }
 
 const base = "";
@@ -153,6 +204,17 @@ async function del<T>(path: string): Promise<T> {
   return data as T;
 }
 
+async function patchJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${base}${path}`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `Request failed (${res.status})`, res.status);
+  return data as T;
+}
+
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   issues: (projectId?: string) =>
@@ -181,7 +243,14 @@ export const api = {
       `/api/projects/${projectId}/search?q=${encodeURIComponent(q)}`
     ),
   issueAudioUrl: (id: string) => `${base}/api/issues/${id}/audio`,
+  billing: () => get<BillingState>("/api/billing/me"),
+  checkout: (tier: Tier, method: "card" | "upi", instrument: string) =>
+    post<{ profile: BillingProfile; invoice: Invoice }>("/api/billing/checkout", { tier, method, instrument }),
+  cancelPlan: () => post<{ profile: BillingProfile }>("/api/billing/cancel"),
   settings: () => get<{ baseUrl: string; integrations: IntegrationDto[] }>("/api/settings"),
+  preferences: () => get<{ preferences: Preferences }>("/api/preferences"),
+  savePreferences: (patch: Partial<Preferences>) =>
+    patchJson<{ preferences: Preferences }>("/api/preferences", patch),
   me: () => get<{ user: GitHubUser | null }>("/api/auth/me"),
   repos: () => get<{ repos: RepoListing[] }>("/api/repos"),
   logout: () => post<{ ok: boolean }>("/api/auth/logout")

@@ -74,10 +74,32 @@ export interface PipelineOptions {
    * (e.g. a one-off triage of a bug that actually belongs elsewhere).
    */
   repoFullNameOverride?: string;
+  /**
+   * Entitlements of the report's owner. Paid stages (hosted drafting, premium
+   * voice) are skipped for the Hobby tier, so the plan a user bought is what
+   * actually changes the output rather than only changing the UI.
+   */
+  entitlements?: { hostedDrafting: boolean; premiumVoice: boolean };
+  /**
+   * Owner preferences from the dashboard Settings tab. `voiceConfirmation:false`
+   * suppresses the spoken reply; `includeTelemetry:false` keeps captured console
+   * output and click breadcrumbs out of the drafted body.
+   */
+  preferences?: { voiceConfirmation: boolean; includeTelemetry: boolean };
 }
 
-const STEP_NAMES: Record<string, string> = {
-  ingest: "Ingest report",
+/** Stand-in telemetry used when the owner opts out of including captured data. */
+const EMPTY_TELEMETRY: Telemetry = {
+  url: "",
+  route: "",
+  viewport: { w: 0, h: 0 },
+  userAgent: "",
+  consoleLogs: [],
+  errors: [],
+  clicks: []
+};
+
+const STEP_NAMES: Record<string, string> = {  ingest: "Ingest report",
   transcribe: "Transcribe voice",
   locate: "Locate suspect files",
   correlate: "Correlate console errors",
@@ -182,6 +204,16 @@ export async function runIssuePipeline(
   // under pressure the pipeline still completes — it just drafts with the
   // offline engine instead of spending a hosted call.
   const hostedAllowed = options.hostedQuota?.allowed ?? true;
+  // Tier gate: hosted drafting and premium voice are paid capabilities. A Hobby
+  // account still gets a complete report — just from the offline engine and the
+  // browser's own speech synthesis.
+  const canDraft = options.entitlements?.hostedDrafting ?? true;
+  const canSpeak = options.entitlements?.premiumVoice ?? true;
+  const useHostedModel = hostedAllowed && canDraft;
+  // Owner settings: whether to speak, and whether captured telemetry is copied
+  // into the drafted issue body.
+  const speakBack = options.preferences?.voiceConfirmation ?? true;
+  const includeTelemetry = options.preferences?.includeTelemetry ?? true;
   const issueId = crypto.randomUUID();
   const record: IssueRecord = {
     id: issueId,
@@ -247,7 +279,7 @@ export async function runIssuePipeline(
             transcriptSource: c.providedSource
           };
         }
-        if (c.audioBase64 && hostedAllowed && llmConfigured()) {
+        if (c.audioBase64 && useHostedModel && llmConfigured()) {
           try {
             const { text } = await transcribeAudio(c.audioBase64, c.audioMime ?? "audio/webm");
             return { transcript: text, transcriptSource: "server-transcription" as TranscriptSource };
@@ -297,7 +329,7 @@ export async function runIssuePipeline(
         });
 
         let draft = heuristic;
-        if (hostedAllowed && llmConfigured()) {
+        if (useHostedModel && llmConfigured()) {
           try {
             const { parsed, model } = await draftIssueJson({
               transcript: c.transcript,
@@ -345,7 +377,7 @@ matchesJson: JSON.stringify(
           embeddings: activeEmbedder().label,
           vectorStore: index.backendName
         };
-        return { draft: { ...draft, issueBody: buildIssueBody(draft, c.transcript, c.telemetry, c.matches, models) } };
+        return { draft: { ...draft, issueBody: buildIssueBody(draft, c.transcript, includeTelemetry ? c.telemetry : EMPTY_TELEMETRY, c.matches, models) } };
       }
     },
     {
@@ -385,13 +417,15 @@ matchesJson: JSON.stringify(
           draft.severity,
           c.github ?? undefined
         );
-        const tts = await renderConfirmationAudio(spokenText);
+        const tts = await renderConfirmationAudio(spokenText, {
+          allowHosted: canSpeak && speakBack
+        });
         return {
           confirmation: {
-            spokenText,
-            voiceBackend: tts.backend,
-            audioBase64: tts.audioBase64,
-            audioMime: tts.audioMime
+            spokenText: speakBack ? spokenText : "",
+            voiceBackend: speakBack ? tts.backend : "web-speech",
+            audioBase64: speakBack ? tts.audioBase64 : undefined,
+            audioMime: speakBack ? tts.audioMime : undefined
           }
         };
       }

@@ -117,6 +117,8 @@ export interface OAuthAccount {
   accessToken: string;
   githubUserId: number;
   githubLogin: string;
+  /** Public profile image, used for the dashboard account chip. */
+  avatarUrl: string;
 }
 
 /** Exchange the one-time `code` for a user token, then fetch who it belongs to. */
@@ -147,9 +149,14 @@ export async function exchangeOAuthCode(code: string): Promise<OAuthAccount> {
     signal: AbortSignal.timeout(20_000)
   });
   if (!userRes.ok) throw new Error(`Could not read the GitHub profile (HTTP ${userRes.status})`);
-  const user = (await userRes.json()) as { id?: number; login?: string };
+  const user = (await userRes.json()) as { id?: number; login?: string; avatar_url?: string };
   if (typeof user.id !== "number" || !user.login) throw new Error("Incomplete GitHub profile");
-  return { accessToken: tokenData.access_token, githubUserId: user.id, githubLogin: user.login };
+  return {
+    accessToken: tokenData.access_token,
+    githubUserId: user.id,
+    githubLogin: user.login,
+    avatarUrl: typeof user.avatar_url === "string" ? user.avatar_url : ""
+  };
 }
 
 export interface RepoListing {

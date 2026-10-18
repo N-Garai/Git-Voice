@@ -491,6 +491,51 @@ button { font-family: inherit; cursor: pointer; }
 
 .dash-layout { display: grid; grid-template-columns: 218px 1fr; gap: 34px; padding-top: 92px; min-height: 100vh; }
 .dash-nav { position: sticky; top: 92px; align-self: start; display: flex; flex-direction: column; gap: 6px; }
+
+/* Account block pinned under the nav links. */
+.dash-account {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.dash-account-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  font-size: 14px;
+  text-decoration: none;
+  max-width: 100%;
+}
+.dash-account-id:hover .dash-account-name { color: var(--cyan); }
+.dash-account-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.2s ease;
+}
+.dash-avatar {
+  border-radius: 50%;
+  flex: none;
+  object-fit: cover;
+  background: var(--bg-panel);
+  border: 1px solid var(--line-bright);
+}
+.dash-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--cyan);
+}
+.dash-account-tier { align-self: flex-start; }
+.dash-account-out { align-self: flex-start; }
 .dash-nav a {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 14px; border-radius: 10px;

@@ -268,10 +268,13 @@ CREATE TABLE IF NOT EXISTS git_voice_sessions (
   id TEXT PRIMARY KEY,
   github_user_id BIGINT NOT NULL,
   github_login TEXT NOT NULL,
+  avatar_url TEXT,
   token TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   expires_at TIMESTAMPTZ NOT NULL
 );
+-- Added after the first deploys: profile image for the dashboard account chip.
+ALTER TABLE git_voice_sessions ADD COLUMN IF NOT EXISTS avatar_url TEXT;
 CREATE INDEX IF NOT EXISTS idx_gv_sessions_login ON git_voice_sessions (github_login);
 
 -- Report records. Without this the dashboard empties on every free-tier sleep
@@ -294,6 +297,45 @@ CREATE TABLE IF NOT EXISTS git_voice_issues (
 );
 CREATE INDEX IF NOT EXISTS idx_gv_issues_project ON git_voice_issues (project_id);
 CREATE INDEX IF NOT EXISTS idx_gv_issues_created ON git_voice_issues (created_at DESC);
+
+-- Plan profiles: one row per GitHub login, holding the purchased tier and the
+-- current billing period. Restored at boot so a restart never downgrades anyone.
+CREATE TABLE IF NOT EXISTS git_voice_profiles (
+  login TEXT PRIMARY KEY,
+  tier TEXT NOT NULL DEFAULT 'hobby',
+  current_period_start TIMESTAMPTZ,
+  current_period_end TIMESTAMPTZ,
+  cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Receipts issued at checkout. No card data is stored — only a masked label.
+CREATE TABLE IF NOT EXISTS git_voice_invoices (
+  id TEXT PRIMARY KEY,
+  number TEXT NOT NULL,
+  login TEXT NOT NULL,
+  tier TEXT NOT NULL,
+  plan_label TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  method TEXT NOT NULL,
+  instrument TEXT NOT NULL,
+  issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL DEFAULT 'paid'
+);
+CREATE INDEX IF NOT EXISTS idx_gv_invoices_login ON git_voice_invoices (login, issued_at DESC);
+
+-- Per-account preferences edited from the dashboard Settings tab.
+CREATE TABLE IF NOT EXISTS git_voice_preferences (
+  login TEXT PRIMARY KEY,
+  voice_confirmation BOOLEAN NOT NULL DEFAULT TRUE,
+  draft_review BOOLEAN NOT NULL DEFAULT TRUE,
+  include_telemetry BOOLEAN NOT NULL DEFAULT TRUE,
+  transcript_preference TEXT NOT NULL DEFAULT 'auto',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
 
 /**

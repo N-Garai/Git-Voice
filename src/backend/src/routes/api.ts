@@ -13,11 +13,13 @@
  *    project — never under the server operator's credentials.
  */
 import { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import crypto from "node:crypto";
 import { config, integrationStatuses } from "../config.js";
 import type { IssueRecord, Project } from "../types.js";
 import { issueStore } from "../store/issues.js";
 import { projectStore, makeProject } from "../store/projects.js";
+import { preferenceStore } from "../store/preferences.js";
 import type { VectorIndex } from "../store/vectorIndex.js";
 import { runIssuePipeline } from "../workflow/issueWorkflow.js";
 import { parseTelemetry } from "./schemas.js";
@@ -45,6 +47,13 @@ import {
   visibleIssues,
   type Caller
 } from "../store/access.js";
+import {
+  billingStore,
+  describeEntitlements,
+  PLANS as BILLING_PLANS,
+  hasEntitlement,
+  type Tier
+} from "../billing/billing.js";
 
 export interface ApiEnv {
   Variables: {
@@ -57,6 +66,23 @@ function issueSummary(r: IssueRecord) {
   const { audioBase64, ...rest } = r;
   void audioBase64;
   return rest;
+}
+
+/** Resolve the pipeline's plan-gated capabilities for a project's owner. */
+function entitlementsFor(project: Project): { hostedDrafting: boolean; premiumVoice: boolean } {
+  if (!project.ownerLogin) return { hostedDrafting: true, premiumVoice: true };
+  const profile = billingStore.profile(project.ownerLogin);
+  return {
+    hostedDrafting: hasEntitlement(profile.tier, "hosted-drafting"),
+    premiumVoice: hasEntitlement(profile.tier, "premium-voice")
+  };
+}
+
+/** Owner preferences that change what a filed report contains. */
+function preferencesFor(project: Project): { voiceConfirmation: boolean; includeTelemetry: boolean } {
+  if (!project.ownerLogin) return { voiceConfirmation: true, includeTelemetry: true };
+  const prefs = preferenceStore.get(project.ownerLogin);
+  return { voiceConfirmation: prefs.voiceConfirmation, includeTelemetry: prefs.includeTelemetry };
 }
 
 const UNAUTHORIZED = { error: "Unauthorized — log in with GitHub or provide the dashboard token." };
@@ -300,7 +326,7 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
         transcriptSource
       },
       index,
-      { hostedQuota: quota, repoFullNameOverride: repoOverride }
+      { hostedQuota: quota, repoFullNameOverride: repoOverride, entitlements: entitlementsFor(targetProject), preferences: preferencesFor(targetProject) }
     );
 
     if (!record) return c.json({ error: "Pipeline failed before producing a record" }, 500);
@@ -347,6 +373,24 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
     }
 
     const id = `prj_${crypto.randomUUID().slice(0, 12)}`;
+    // Plan gate: how many projects the tier allows.
+    const ownerLogin = who.session?.githubLogin;
+    if (ownerLogin) {
+      const profile = billingStore.profile(ownerLogin);
+      const limit = BILLING_PLANS[profile.tier]?.projectLimit ?? 1;
+      const owned = projectStore.list().filter((p) => p.ownerLogin?.toLowerCase() === ownerLogin.toLowerCase());
+      if (owned.length >= limit) {
+        return c.json(
+          {
+            error: `The ${profile.tier} plan includes ${limit} project${limit === 1 ? "" : "s"}. Upgrade to add another.`,
+            tier: profile.tier,
+            limit
+          },
+          402
+        );
+      }
+    }
+
     // The creator's GitHub login becomes the project's owner. Every later
     // action on this project (index, publish) uses *their* token — the
     // server operator's credentials are never involved.
@@ -354,7 +398,7 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
       id,
       name,
       repoFullName,
-      ownerLogin: who.session?.githubLogin
+      ownerLogin
     });
     await projectStore.upsert(project);
     return c.json({ project }, 201);
@@ -386,11 +430,32 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
 
     projectStore.upsert({ ...project, indexStatus: "indexing", indexError: undefined });
 
-    // Only ever the project owner's own credential: the operator's token is
+// Only ever the project owner's own credential: the operator's token is
     // never used, so indexing can never touch a repo the owner cannot read.
-    const ownerToken = project.ownerLogin
-      ? await sessionStore.tokenForLogin(project.ownerLogin)
-      : undefined;
+    // Private repositories are a paid capability.
+    const ownerProfile = project.ownerLogin ? billingStore.profile(project.ownerLogin) : undefined;
+    const privateAllowed = ownerProfile
+      ? hasEntitlement(ownerProfile.tier, "private-repos")
+      : true; // operator-triggered indexing on a repo they configured
+    const ownerToken =
+      project.ownerLogin && privateAllowed
+        ? await sessionStore.tokenForLogin(project.ownerLogin)
+        : undefined;
+    if (project.ownerLogin && !privateAllowed) {
+      await projectStore.upsert({
+        ...project,
+        indexStatus: "failed",
+        indexError: "Private repository indexing requires the Freelancer plan or above."
+      });
+      return c.json(
+        {
+          error: "Private repository indexing is available on the Freelancer plan and above.",
+          tier: ownerProfile?.tier,
+          upgrade: true
+        },
+        402
+      );
+    }
 
     try {
       const result = isDemo || !repoInput
@@ -447,9 +512,35 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
   });
 
   // ---------------------------------------------------------------- settings
-  app.get("/api/settings", (c) =>
+app.get("/api/settings", (c) =>
     c.json({ baseUrl: config.baseUrl, integrations: integrationStatuses() })
   );
+
+  // ---------------------------------------------------------- preferences
+  // Real, editable account settings. Everything the dashboard Settings tab
+  // changes is stored here and read back by the pipeline.
+  app.get("/api/preferences", async (c) => {
+    const who = await allowRead(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
+    const login = who.session?.githubLogin;
+    if (!login) return c.json(UNAUTHORIZED, 401);
+    return c.json({ preferences: preferenceStore.get(login) });
+  });
+
+  app.patch("/api/preferences", async (c) => {
+    const who = await allowRead(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
+    const login = who.session?.githubLogin;
+    if (!login) return c.json(UNAUTHORIZED, 401);
+
+    let body: Record<string, unknown>;
+    try {
+      body = (await c.req.json()) as Record<string, unknown>;
+    } catch {
+      return c.json({ error: "Expected JSON body" }, 400);
+    }
+    return c.json({ preferences: preferenceStore.update(login, body) });
+  });
 
   // ---------------------------------------------------------------- auth
   // GitHub OAuth login (free OAuth App). Logged-out users keep full access to
@@ -470,10 +561,11 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
     }
     try {
       const account = await exchangeOAuthCode(code);
-      const session = await sessionStore.create(
+const session = await sessionStore.create(
         account.githubUserId,
         account.githubLogin,
-        account.accessToken
+        account.accessToken,
+        account.avatarUrl
       );
       c.header("Set-Cookie", sessionCookie(session.id));
       return c.redirect("/dashboard/projects?github=connected", 302);
@@ -485,7 +577,87 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
   app.get("/api/auth/me", async (c) => {
     const session = await sessionFromCookie(c.req.header("cookie"));
     if (!session) return c.json({ user: null });
-    return c.json({ user: { login: session.githubLogin, id: session.githubUserId } });
+    return c.json({
+      user: {
+        login: session.githubLogin,
+        id: session.githubUserId,
+        avatarUrl: session.avatarUrl,
+        profileUrl: `https://github.com/${session.githubLogin}`
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------- billing
+  // Plans, entitlements, simulated checkout and receipts. The tier stored here
+  // is what the pipeline actually gates on, so the pricing page describes real
+  // behaviour rather than marketing copy.
+  app.get("/api/billing/plans", (c) =>
+    c.json({
+      plans: Object.values(BILLING_PLANS).map((p) => ({
+        tier: p.tier,
+        label: p.label,
+        amountCents: p.amountCents,
+        currency: p.currency,
+        projectLimit: p.projectLimit,
+        entitlements: p.entitlements
+      })),
+      simulation: true
+    })
+  );
+
+  /** Current plan + entitlements + receipts for the signed-in account. */
+  app.get("/api/billing/me", async (c) => {
+    const who = await allowRead(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
+    const login = who.operator ? "" : who.session?.githubLogin ?? "";
+    if (!login) return c.json(UNAUTHORIZED, 401);
+
+    const profile = billingStore.profile(login);
+    return c.json({
+      profile,
+      entitlements: describeEntitlements(profile),
+      invoices: billingStore.invoicesFor(login),
+      projectLimit: BILLING_PLANS[profile.tier]?.projectLimit ?? 1
+    });
+  });
+
+  app.post("/api/billing/checkout", async (c) => {
+    const who = await allowRead(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
+    const login = who.session?.githubLogin;
+    if (!login) {
+      return c.json({ error: "Sign in with GitHub to purchase a plan" }, 401);
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = (await c.req.json()) as Record<string, unknown>;
+    } catch {
+      return c.json({ error: "Expected JSON body" }, 400);
+    }
+
+    const tier = body.tier as Tier;
+    const method = body.method as "card" | "upi";
+    if (!BILLING_PLANS[tier]) return c.json({ error: "Unknown plan" }, 400);
+    if (method !== "card" && method !== "upi") {
+      return c.json({ error: "Unsupported payment method" }, 400);
+    }
+    const instrument = typeof body.instrument === "string" ? body.instrument : "";
+    if (!instrument.trim()) return c.json({ error: "Payment details are required" }, 400);
+
+    const result = billingStore.checkout({ login, tier, method, instrument });
+    if (!result.ok) {
+      return c.json({ error: result.error }, (result.status ?? 400) as ContentfulStatusCode);
+    }
+    return c.json({ profile: result.profile, invoice: result.invoice }, 201);
+  });
+
+  app.post("/api/billing/cancel", async (c) => {
+    const who = await allowRead(c);
+    if (!who) return c.json(UNAUTHORIZED, 401);
+    const login = who.session?.githubLogin;
+    if (!login) return c.json(UNAUTHORIZED, 401);
+    return c.json({ profile: billingStore.cancel(login) });
   });
 
   app.post("/api/auth/logout", async (c) => {
@@ -540,6 +712,24 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
     projectStore.upsert({ ...target, indexStatus: "indexing" });
     // Webhooks carry no user session — use the owner's stored token so
     // private-repo projects still reindex; public repos work without one.
+    // Automatic re-indexing is a paid capability.
+    const ownerProfile = target.ownerLogin ? billingStore.profile(target.ownerLogin) : undefined;
+    const autoReindexAllowed = ownerProfile
+      ? hasEntitlement(ownerProfile.tier, "auto-reindex")
+      : true; // operator-configured deployment
+    if (!autoReindexAllowed) {
+      await projectStore.upsert({
+        ...target,
+        indexStatus: "empty",
+        indexError: undefined
+      });
+      return c.json({
+        ok: true,
+        ignored: "automatic re-index on push requires the Freelancer plan or above",
+        tier: ownerProfile?.tier,
+        upgrade: true
+      });
+    }
     const ownerToken = target.ownerLogin
       ? await sessionStore.tokenForLogin(target.ownerLogin)
       : undefined;

@@ -6,44 +6,93 @@ import {
   ApiError,
   getToken,
   setToken as setTokenValue,
+  type Preferences as PrefsDto,
   type IssueRecordDto,
   type ProjectDto,
   type IntegrationDto,
   type GitHubUser,
-  type RepoListing
+  type RepoListing,
+  type Tier,
+  type BillingState,
+  type Invoice
 } from "../lib/api";
 import { useRoute, navigate } from "../lib/router";
 import { GearLogo } from "../components/Chrome";
+import Checkout, { Receipt } from "../components/Checkout";
+import { PLANS } from "../data/plans";
 import { useScrollReveal } from "../hooks/animations";
 
-type View = "issues" | "projects" | "settings";
+type View = "issues" | "projects" | "billing" | "settings";
 
 const VIEW_BY_PATH: Record<string, View> = {
   "/dashboard": "issues",
   "/dashboard/issues": "issues",
   "/dashboard/projects": "projects",
+  "/dashboard/billing": "billing",
   "/dashboard/settings": "settings"
 };
 
 export default function Dashboard(): JSX.Element {
   const path = useRoute();
   const view = VIEW_BY_PATH[path] ?? "issues";
+  const [user, setUser] = useState<GitHubUser | null>(null);
+  const [tier, setTier] = useState<Tier>("hobby");
+
+  // Account + plan drive the nav chip, its tier badge, and the billing view.
+  useEffect(() => {
+    void api
+      .me()
+      .then((m) => setUser(m.user))
+      .catch(() => setUser(null));
+    void api
+      .billing()
+      .then((b) => setTier(b.profile.tier))
+      .catch(() => setTier("hobby"));
+  }, []);
+
+  const signOut = async () => {
+    try {
+      await api.logout();
+    } catch {
+      // The server clears the cookie regardless.
+    }
+    window.location.href = "/";
+  };
+
   return (
     <div className="dash-layout shell">
-      <DashNav view={view} />
+      <DashNav view={view} tier={tier} user={user} onSignOut={() => void signOut()} />
       <div>
         {view === "issues" && <IssuesView />}
         {view === "projects" && <ProjectsView />}
-        {view === "settings" && <SettingsView />}
+        {view === "billing" && <BillingView signedIn={Boolean(user)} />}
+        {view === "settings" && <SettingsView user={user} tier={tier} />}
       </div>
     </div>
   );
 }
 
-function DashNav({ view }: { view: View }): JSX.Element {
+const TIER_BADGE: Record<Tier, string> = {
+  hobby: "Hobby",
+  freelancer: "Freelancer",
+  agency: "Agency"
+};
+
+function DashNav({
+  view,
+  tier,
+  user,
+  onSignOut
+}: {
+  view: View;
+  tier: Tier;
+  user: GitHubUser | null;
+  onSignOut: () => void;
+}): JSX.Element {
   const items: Array<{ id: View; label: string; icon: string }> = [
     { id: "issues", label: "Issues", icon: "📄" },
     { id: "projects", label: "Projects", icon: "🗂" },
+    { id: "billing", label: "Plan", icon: "💳" },
     { id: "settings", label: "Settings", icon: "⚙" }
   ];
   return (
@@ -62,6 +111,40 @@ function DashNav({ view }: { view: View }): JSX.Element {
           <span>{item.icon}</span> {item.label}
         </a>
       ))}
+
+      {/* Account block pinned to the bottom of the rail. */}
+      <div className="dash-account">
+        {user ? (
+          <>
+            <a
+              className="dash-account-id"
+              href={user.profileUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`@${user.login} on GitHub`}
+            >
+              {user.avatarUrl ? (
+                <img src={user.avatarUrl} alt="" width={28} height={28} className="dash-avatar" />
+              ) : (
+                <span className="dash-avatar dash-avatar-fallback" aria-hidden="true">
+                  {user.login.slice(0, 1).toUpperCase()}
+                </span>
+              )}
+              <span className="dash-account-name">{user.login}</span>
+            </a>
+            <span className={`status-pill ${tier === "hobby" ? "queued" : "completed"} dash-account-tier`}>
+              {TIER_BADGE[tier]}
+            </span>
+            <button className="btn btn-ghost btn-sm dash-account-out" onClick={onSignOut}>
+              Log out
+            </button>
+          </>
+        ) : (
+          <a className="btn btn-ghost btn-sm" href="/api/auth/github">
+            Sign in
+          </a>
+        )}
+      </div>
     </aside>
   );
 }
@@ -498,6 +581,152 @@ interface SpeechRecognitionLike {
   stop(): void;
 }
 
+/* ------------------------------------------------------------------ billing */
+
+const TIER_LABEL: Record<Tier, string> = {
+  hobby: "Hobby",
+  freelancer: "Freelancer",
+  agency: "Agency"
+};
+
+function money(cents: number): string {
+  return `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}`;
+}
+
+function BillingView({ signedIn }: { signedIn: boolean }): JSX.Element {
+  const [state, setState] = useState<BillingState | null>(null);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [receipt, setReceipt] = useState<Invoice | null>(null);
+  const [message, setMessage] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      setState(await api.billing());
+    } catch {
+      setState(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (!signedIn) {
+    return (
+      <div className="empty">
+        <div className="big">🔒</div>
+        <p>Sign in with GitHub to see your plan and invoices.</p>
+        <a className="btn btn-primary mt-16" href="/api/auth/github">Sign in</a>
+      </div>
+    );
+  }
+
+  if (!state) return <div className="empty"><span className="loading-dots"><i /><i /><i /></span></div>;
+
+  const { profile, entitlements, invoices, projectLimit } = state;
+
+  const cancelPlan = async () => {
+    try {
+      await api.cancelPlan();
+      setMessage("Plan will end at the close of the current period.");
+      await load();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <div>
+      <div className="dash-head">
+        <h1 className="dash-title">Plan &amp; billing</h1>
+        <button className="btn btn-primary btn-sm" onClick={() => setCheckoutOpen(true)}>
+          {profile.tier === "hobby" ? "Upgrade" : "Change plan"}
+        </button>
+      </div>
+
+      {message && <p className="mono-xs text-cyan" style={{ marginBottom: 14 }}>{message}</p>}
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <span className={`status-pill ${profile.tier === "hobby" ? "queued" : "completed"}`}>
+            {TIER_LABEL[profile.tier]}
+          </span>
+          <span className="mono-xs text-faint">@{profile.login}</span>
+          {profile.currentPeriodEnd && (
+            <span className="mono-xs text-faint">
+              {profile.cancelAtPeriodEnd ? "ends" : "renews"} {new Date(profile.currentPeriodEnd).toLocaleDateString()}
+            </span>
+          )}
+          {profile.cancelAtPeriodEnd ? (
+            <button className="btn btn-ghost btn-sm" style={{ marginLeft: "auto" }} onClick={() => void load()}>
+              Cancelled — renews on {new Date(profile.currentPeriodEnd ?? "").toLocaleDateString()}
+            </button>
+          ) : profile.tier !== "hobby" ? (
+            <button className="btn btn-ghost btn-sm" style={{ marginLeft: "auto" }} onClick={() => void cancelPlan()}>
+              Cancel plan
+            </button>
+          ) : null}
+        </div>
+        <p className="mono-xs text-faint mt-16">
+          {projectLimit} project{projectLimit === 1 ? "" : "s"} included on this plan.
+        </p>
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <h3 style={{ fontFamily: "var(--font-display)", marginBottom: 14 }}>What this plan unlocks</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+          {entitlements.map((e) => (
+            <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14 }}>
+              <span className={e.included ? "text-cyan" : "text-faint"}>{e.included ? "✓" : "—"}</span>
+              <span style={{ color: e.included ? "var(--ink)" : "var(--ink-faint)" }}>{e.label}</span>
+            </div>
+          ))}
+        </div>
+        {profile.tier === "hobby" && (
+          <p className="mono-xs text-faint mt-16">
+            The free tier runs the complete pipeline using the built-in drafting engine and your browser's voice.
+          </p>
+        )}
+      </div>
+
+      <div className="card">
+        <h3 style={{ fontFamily: "var(--font-display)", marginBottom: 14 }}>Invoices</h3>
+        {invoices.length === 0 ? (
+          <p className="text-dim" style={{ fontSize: 14 }}>No invoices yet.</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {invoices.map((inv) => (
+              <div key={inv.id} style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13.5 }}>
+                <span className="mono" style={{ color: "var(--cyan)" }}>{inv.number}</span>
+                <span>{inv.planLabel}</span>
+                <span className="mono-xs text-faint">{inv.instrument}</span>
+                <span className="mono-xs text-faint">{new Date(inv.issuedAt).toLocaleDateString()}</span>
+                <span style={{ marginLeft: "auto" }}>{money(inv.amountCents)} {inv.currency}</span>
+                <span style={{ color: "var(--green)" }}>{inv.status}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {checkoutOpen && (
+        <Checkout
+          plans={PLANS.map((p) => ({ tier: p.id, label: p.tier, amountCents: p.amountCents }))}
+          currentTier={profile.tier}
+          onCancel={() => setCheckoutOpen(false)}
+          onDone={(inv) => {
+            setCheckoutOpen(false);
+            setReceipt(inv);
+            void load();
+          }}
+        />
+      )}
+
+      {receipt && <Receipt invoice={receipt} onClose={() => setReceipt(null)} />}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------- projects */
 
 function ProjectsView(): JSX.Element {
@@ -509,9 +738,7 @@ function ProjectsView(): JSX.Element {
   const [token, setToken] = useState(getToken());
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
-  const [ghUser, setGhUser] = useState<GitHubUser | null>(null);
   const [ghRepos, setGhRepos] = useState<RepoListing[]>([]);
-  const [ghState, setGhState] = useState<"unknown" | "connected" | "logged-out" | "unconfigured">("unknown");
   const [composer, setComposer] = useState<{ open: boolean; projectId: string; projectName: string } | null>(null);
 
   const [loadError, setLoadError] = useState("");
@@ -536,12 +763,10 @@ function ProjectsView(): JSX.Element {
       window.history.replaceState({}, "", window.location.pathname);
     }
     void api.me().then((m) => {
-      setGhUser(m.user);
-      setGhState(m.user ? "connected" : "logged-out");
       if (m.user) {
         void api.repos().then((r) => setGhRepos(r.repos)).catch(() => setGhRepos([]));
       }
-    }).catch(() => setGhState("logged-out"));
+    }).catch(() => undefined);
   }, [load]);
 
   useEffect(() => {
@@ -577,33 +802,6 @@ function ProjectsView(): JSX.Element {
     } finally {
       setBusy(null);
     }
-  };
-
-  const loginGh = async () => {
-    // Probe first so an unconfigured server shows a hint instead of a raw error page.
-    try {
-      const res = await fetch("/api/auth/github", { redirect: "manual" });
-      if (res.status === 404) {
-        setGhState("unconfigured");
-        setMessage("GitHub login is not configured on this server yet (needs the OAuth env keys). Public repo links still work below.");
-        return;
-      }
-    } catch {
-      // Offline or blocked probe — try the navigation anyway.
-    }
-    window.location.href = "/api/auth/github";
-  };
-
-  const logoutGh = async () => {
-    try {
-      await api.logout();
-    } catch {
-      // The server clears the cookie regardless.
-    }
-    setGhUser(null);
-    setGhRepos([]);
-    setGhState("logged-out");
-    setMessage("Logged out of GitHub — public repo links still work.");
   };
 
   const removeProject = async (id: string, name: string) => {
@@ -773,25 +971,6 @@ function ProjectsView(): JSX.Element {
       </div>
 
       <div className="card mt-24">
-        <h3 style={{ fontFamily: "var(--font-display)", marginBottom: 14 }}>GitHub</h3>
-        {ghState === "connected" && ghUser ? (
-          <div>
-            <p className="text-dim" style={{ fontSize: 14, marginBottom: 12 }}>
-              Connected as <strong className="mono">@{ghUser.login}</strong> — your repos (private included) are selectable when adding a project.
-            </p>
-            <button className="btn btn-ghost btn-sm" onClick={() => void logoutGh()}>Log out</button>
-          </div>
-        ) : (
-          <div>
-            <button className="btn btn-primary" onClick={() => void loginGh()}>Login with GitHub</button>
-            <p className="mono-xs text-faint mt-8">
-              Optional. Without login you can still use any <strong>public</strong> repo link below. Login unlocks your private repos too.
-            </p>
-          </div>
-        )}
-      </div>
-
-      <div className="card mt-24">
         <h3 style={{ fontFamily: "var(--font-display)", marginBottom: 14 }}>Add a project</h3>
         {ghRepos.length > 0 && (
           <div style={{ marginBottom: 12 }}>
@@ -856,14 +1035,66 @@ function ProjectsView(): JSX.Element {
 
 /* ------------------------------------------------------------------ settings */
 
-function SettingsView(): JSX.Element {
+interface Preferences extends PrefsDto {}
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+  hint
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  hint: string;
+}): JSX.Element {
+  return (
+    <label className="pref-row" style={{ display: "flex", gap: 14, alignItems: "flex-start", padding: "14px 0", borderBottom: "1px solid var(--line)", cursor: "pointer" }}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ marginTop: 3, width: 16, height: 16, accentColor: "var(--cyan)", flex: "none" }}
+      />
+      <span>
+        <span style={{ display: "block", fontSize: 14, color: "var(--ink)", marginBottom: 3 }}>{label}</span>
+        <span className="mono-xs text-faint">{hint}</span>
+      </span>
+    </label>
+  );
+}
+
+function SettingsView({ user, tier }: { user: GitHubUser | null; tier: Tier }): JSX.Element {
   const [settings, setSettings] = useState<{ baseUrl: string; integrations: IntegrationDto[] } | null>(null);
+  const [prefs, setPrefs] = useState<Preferences | null>(null);
+  const [saved, setSaved] = useState("");
 
   useEffect(() => {
-    void api.settings().then(setSettings).catch(() =>
-      setSettings({ baseUrl: window.location.origin, integrations: [] })
-    );
+    void api
+      .settings()
+      .then(setSettings)
+      .catch(() => setSettings({ baseUrl: window.location.origin, integrations: [] }));
+    void api
+      .preferences()
+      .then((r) => setPrefs(r.preferences))
+      .catch(() => setPrefs(null));
   }, []);
+
+  /** Optimistic update, then persisted; reverts visibly if the server rejects. */
+  const patch = async (next: Partial<Preferences>) => {
+    if (!prefs) return;
+    const optimistic = { ...prefs, ...next };
+    setPrefs(optimistic);
+    try {
+      const res = await api.savePreferences(next);
+      setPrefs(res.preferences);
+      setSaved("Saved");
+      window.setTimeout(() => setSaved(""), 1600);
+    } catch {
+      setPrefs(prefs);
+      setSaved("Could not save — try again");
+    }
+  };
 
   if (!settings) return <div className="empty"><span className="loading-dots"><i /><i /><i /></span></div>;
 
@@ -871,14 +1102,109 @@ function SettingsView(): JSX.Element {
     <div>
       <div className="dash-head">
         <h1 className="dash-title">Settings</h1>
+        {saved && <span className="mono-xs text-cyan">{saved}</span>}
       </div>
-      <div className="card">
-        <p className="mono-xs text-faint" style={{ marginBottom: 4 }}>DEPLOYMENT</p>
-        <p className="mono" style={{ color: "var(--cyan)", marginBottom: 20 }}>{settings.baseUrl}</p>
-        <p className="mono-xs text-faint" style={{ marginBottom: 20 }}>
-          Each integration shows the mode it is running in right now. Adding the environment
-          variable upgrades that station of the pipeline — nothing else changes.
+
+      {/* -------------------------------------------------- account */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <h3 style={{ fontFamily: "var(--font-display)", marginBottom: 14 }}>Account</h3>
+        {user ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            {user.avatarUrl ? (
+              <img src={user.avatarUrl} alt="" width={44} height={44} className="dash-avatar" style={{ width: 44, height: 44 }} />
+            ) : (
+              <span className="dash-avatar dash-avatar-fallback" style={{ width: 44, height: 44, fontSize: 17 }} aria-hidden="true">
+                {user.login.slice(0, 1).toUpperCase()}
+              </span>
+            )}
+            <div>
+              <div style={{ fontSize: 15, marginBottom: 2 }}>
+                <a href={user.profileUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--cyan)" }}>
+                  @{user.login}
+                </a>
+              </div>
+              <div className="mono-xs text-faint">
+                Signed in with GitHub · {user.id}
+              </div>
+            </div>
+            <span className={`status-pill ${tier === "hobby" ? "queued" : "completed"}`} style={{ marginLeft: "auto" }}>
+              {TIER_BADGE[tier]}
+            </span>
+          </div>
+        ) : (
+          <p className="text-dim" style={{ fontSize: 14 }}>
+            Not signed in. <a href="/api/auth/github" style={{ color: "var(--cyan)" }}>Sign in with GitHub</a> to manage
+            preferences and private repositories.
+          </p>
+        )}
+      </div>
+
+      {/* -------------------------------------------------- preferences */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <h3 style={{ fontFamily: "var(--font-display)", marginBottom: 6 }}>Report handling</h3>
+        <p className="mono-xs text-faint" style={{ marginBottom: 8 }}>
+          Applied to every report filed from this account.
         </p>
+
+        {!prefs ? (
+          <p className="text-dim" style={{ fontSize: 14 }}>Sign in to change these.</p>
+        ) : (
+          <>
+            <Toggle
+              checked={prefs.voiceConfirmation}
+              onChange={(v) => void patch({ voiceConfirmation: v })}
+              label="Speak the confirmation"
+              hint="Reads back the issue title and where it was filed. Off sends the text only."
+            />
+            <Toggle
+              checked={prefs.draftReview}
+              onChange={(v) => void patch({ draftReview: v })}
+              label="Hold reports for review before publishing"
+              hint="Keeps a finished report as a dashboard draft so you can check it first."
+            />
+            <Toggle
+              checked={prefs.includeTelemetry}
+              onChange={(v) => void patch({ includeTelemetry: v })}
+              label="Include captured telemetry in the issue"
+              hint="Adds console output, page errors and click breadcrumbs to the drafted body. Turn off to keep client data out of the issue entirely."
+            />
+
+            <div style={{ padding: "14px 0", borderBottom: "1px solid var(--line)" }}>
+              <div style={{ fontSize: 14, marginBottom: 8 }}>Preferred transcript</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {(["auto", "voice", "typed"] as const).map((opt) => (
+                  <button
+                    key={opt}
+                    className={`btn btn-sm ${prefs.transcriptPreference === opt ? "btn-primary" : "btn-ghost"}`}
+                    onClick={() => void patch({ transcriptPreference: opt })}
+                  >
+                    {opt === "auto" ? "Automatic" : opt === "voice" ? "Voice" : "Typed"}
+                  </button>
+                ))}
+              </div>
+              <div className="mono-xs text-faint" style={{ marginTop: 8 }}>
+                {prefs.transcriptPreference === "auto"
+                  ? "Uses whichever transcript the report provides."
+                  : prefs.transcriptPreference === "voice"
+                    ? "Prefers speech; falls back to typed when no audio was captured."
+                    : "Prefers typed text; falls back to speech when nothing was typed."}
+              </div>
+            </div>
+
+            <p className="mono-xs text-faint" style={{ marginTop: 14 }}>
+              Last saved {new Date(prefs.updatedAt).toLocaleString()}
+            </p>
+          </>
+        )}
+      </div>
+
+      {/* -------------------------------------------------- deployment */}
+      <div className="card">
+        <h3 style={{ fontFamily: "var(--font-display)", marginBottom: 4 }}>Deployment</h3>
+        <p className="mono-xs text-faint" style={{ marginBottom: 16 }}>
+          Read-only environment status for this deployment. These are set by whoever operates the server.
+        </p>
+        <p className="mono" style={{ color: "var(--cyan)", marginBottom: 20 }}>{settings.baseUrl}</p>
         {settings.integrations.map((it) => (
           <div className="settings-row" key={`${it.id}-${it.envKey}`}>
             <div>

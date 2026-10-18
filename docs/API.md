@@ -166,11 +166,49 @@ report** to another `owner/repo` without changing the project default. The
 report is still published with the project owner's own token, so the GitHub
 author is unchanged; a repo they cannot write to simply degrades to a draft.
 
+## Plans and billing
+
+A signed-in GitHub account owns one plan profile. The tier is not cosmetic — it
+decides which pipeline stages run in hosted mode and which are held back, so the
+pricing page describes behaviour the server enforces.
+
+| Tier | Price | Projects | Unlocks |
+|---|---|---|---|
+| Hobby | $0 | 1 | Public repos, offline drafting, browser voice |
+| Freelancer | $15/mo | 1 | Private repos, model drafting, premium voice, auto re-index on push |
+| Agency | $60/mo | 10 | Everything above, plus multiple client projects |
+
+Gated responses use **402 Payment Required** with `{ upgrade: true, tier }`.
+
+### `GET /api/billing/plans`
+
+Public catalogue (no auth): tier, price in cents, project limit, entitlements.
+
+### `GET /api/billing/me`  *(operator or owner)*
+
+`{ profile, entitlements, invoices, projectLimit }`.
+
+### `POST /api/billing/checkout`  *(GitHub sign-in required)*
+
+```json
+{ "tier": "freelancer", "method": "card", "instrument": "4242 4242 4242 4242" }
+```
+
+**Simulated.** No processor is contacted and no money moves. Cards are checked
+with Luhn; UPI handles are shape-checked. On success returns `201` with the new
+`profile` and a `paid` `invoice`. Only a masked instrument label
+(`•••• 4242`, `na•••@okaxis`) is ever stored — never the raw value.
+
+### `POST /api/billing/cancel`  *(GitHub sign-in required)*
+
+Keeps the plan until the paid period ends, then falls back to Hobby.
+
 ## Settings
 
 ### `GET /api/settings`
 
-Machine-readable integration health for the dashboard's Settings tab:
+Machine-readable deployment status for the dashboard's Settings tab. Read-only
+operator configuration — not user-editable.
 
 ```json
 { "baseUrl": "https://…", "integrations": [
@@ -178,8 +216,29 @@ Machine-readable integration health for the dashboard's Settings tab:
     "configured": false, "activeMode": "…", "fallbackMode": "…" } ] }
 ```
 
-The `github` row reports whether the OAuth env keys are set; the `auth` row reports
+The `github-login` row reports whether the OAuth env keys are set; the `auth` row reports
 whether the operator key exists.
+
+### `GET /api/preferences`  *(GitHub sign-in required)*
+
+The signed-in account's settings, with defaults filled in:
+
+```json
+{ "preferences": { "login": "octocat", "voiceConfirmation": true,
+  "draftReview": true, "includeTelemetry": true,
+  "transcriptPreference": "auto", "updatedAt": "…" } }
+```
+
+### `PATCH /api/preferences`  *(GitHub sign-in required)*
+
+Updates any subset of the above. These are read back by the pipeline, not just
+the UI: `voiceConfirmation: false` suppresses the spoken reply, and
+`includeTelemetry: false` keeps captured console output, page errors and click
+breadcrumbs out of the drafted issue body.
+
+Unknown fields are discarded rather than stored, so a caller cannot grant
+itself a plan or inject a value through this endpoint. An unrecognised
+`transcriptPreference` falls back to `"auto"`.
 
 ## Auth (GitHub login, optional)
 

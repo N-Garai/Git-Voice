@@ -5,6 +5,8 @@ import { useScrollReveal, SplitChars, prefersReducedMotion, usePageReveals } fro
 import { useRevealWords } from "../hooks/motion";
 import { navigate } from "../lib/router";
 import { PLANS, COMPARISON, FAQ } from "../data/plans";
+import { api, type Tier, type Invoice } from "../lib/api";
+import Checkout, { Receipt } from "../components/Checkout";
 
 /** "—" for capabilities a tier does not include, "✓" for included ones. */
 function Cell({ value }: { value: string | null }): JSX.Element {
@@ -27,6 +29,17 @@ function Cell({ value }: { value: string | null }): JSX.Element {
 
 export default function Pricing(): JSX.Element {
   usePageReveals();
+  const [checkout, setCheckout] = useState<{ open: boolean; tier: Tier }>({ open: false, tier: "freelancer" });
+  const [receipt, setReceipt] = useState<Invoice | null>(null);
+  const [tier, setTier] = useState<Tier>("hobby");
+
+  useEffect(() => {
+    void api
+      .billing()
+      .then((b) => setTier(b.profile.tier))
+      .catch(() => setTier("hobby"));
+  }, []);
+
   const [entered, setEntered] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setEntered(true), prefersReducedMotion() ? 0 : 120);
@@ -66,7 +79,11 @@ export default function Pricing(): JSX.Element {
 
             <div className="pricing-grid reveal-stagger" ref={tiers.ref}>
               {PLANS.map((p) => (
-                <PriceCard key={p.id} plan={p} />
+                <PriceCard
+                  key={p.id}
+                  plan={p}
+                  onChoose={(id) => setCheckout({ open: true, tier: id })}
+                />
               ))}
             </div>
           </div>
@@ -122,11 +139,25 @@ export default function Pricing(): JSX.Element {
         </section>
       </main>
       <SiteFooter />
+
+      {checkout.open && (
+        <Checkout
+          plans={PLANS.map((p) => ({ tier: p.id, label: p.tier, amountCents: p.amountCents }))}
+          currentTier={tier}
+          onCancel={() => setCheckout({ open: false, tier: checkout.tier })}
+          onDone={(inv) => {
+            setCheckout({ open: false, tier: checkout.tier });
+            setTier(inv.tier);
+            setReceipt(inv);
+          }}
+        />
+      )}
+      {receipt && <Receipt invoice={receipt} onClose={() => setReceipt(null)} />}
     </>
   );
 }
 
-function PriceCard({ plan }: { plan: (typeof PLANS)[number] }): JSX.Element {
+function PriceCard({ plan, onChoose }: { plan: (typeof PLANS)[number]; onChoose: (id: (typeof PLANS)[number]["id"]) => void }): JSX.Element {
   return (
     <div className={`card price-card${plan.featured ? " featured" : ""}`}>
       {plan.featured && <span className="pc-flag">Most wired</span>}
@@ -136,7 +167,10 @@ function PriceCard({ plan }: { plan: (typeof PLANS)[number] }): JSX.Element {
       <ul>
         {plan.features.map((f) => <li key={f}>{f}</li>)}
       </ul>
-      <button className={`btn ${plan.featured ? "btn-primary" : "btn-ghost"}`} onClick={() => navigate(plan.to)}>
+      <button
+        className={`btn ${plan.featured ? "btn-primary" : "btn-ghost"}`}
+        onClick={() => onChoose(plan.id)}
+      >
         {plan.cta}
       </button>
     </div>

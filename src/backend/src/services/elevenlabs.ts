@@ -12,7 +12,13 @@ export interface TtsResult {
   backend: "elevenlabs" | "web-speech";
 }
 
-export async function renderConfirmationAudio(spokenText: string): Promise<TtsResult> {
+export async function renderConfirmationAudio(
+  spokenText: string,
+  options: { allowHosted?: boolean } = {}
+): Promise<TtsResult> {
+  // Premium voice is a paid capability; free-tier accounts fall back to the
+  // browser's own speech synthesis.
+  if (options.allowHosted === false) return { backend: "web-speech" };
   const key = config.elevenlabs.apiKey;
   if (!key) return { backend: "web-speech" };
 

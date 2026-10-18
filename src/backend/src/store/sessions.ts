@@ -14,6 +14,8 @@ export interface Session {
   id: string;
   githubUserId: number;
   githubLogin: string;
+  /** Public profile image URL; empty when unavailable. */
+  avatarUrl: string;
   /** OAuth access token — server-side only, never serialized to the client. */
   token: string;
   createdAt: string;
@@ -66,12 +68,13 @@ export class SessionStore {
     return true;
   }
 
-  async create(githubUserId: number, githubLogin: string, token: string): Promise<Session> {
+  async create(githubUserId: number, githubLogin: string, token: string, avatarUrl = ""): Promise<Session> {
     const now = Date.now();
     const session: Session = {
       id: randomId(),
       githubUserId,
       githubLogin,
+      avatarUrl,
       token,
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + config.auth.sessionMaxAgeMs).toISOString()
@@ -80,11 +83,12 @@ export class SessionStore {
     if (this.pool) {
       try {
         await this.pool.query(
-          `INSERT INTO git_voice_sessions (id, github_user_id, github_login, token, created_at, expires_at)
-           VALUES ($1,$2,$3,$4,$5,$6)
-           ON CONFLICT (id) DO UPDATE SET token = EXCLUDED.token, expires_at = EXCLUDED.expires_at`,
-          [session.id, session.githubUserId, session.githubLogin, session.token,
-           new Date(session.createdAt), new Date(session.expiresAt)]
+`INSERT INTO git_voice_sessions (id, github_user_id, github_login, avatar_url, token, created_at, expires_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (id) DO UPDATE SET token = EXCLUDED.token, expires_at = EXCLUDED.expires_at,
+           avatar_url = EXCLUDED.avatar_url`,
+        [session.id, session.githubUserId, session.githubLogin, session.avatarUrl || null, session.token,
+         new Date(session.createdAt), new Date(session.expiresAt)]
         );
       } catch {
         // Memory remains the source of truth when the mirror fails.
@@ -106,7 +110,7 @@ export class SessionStore {
     if (!this.pool) return undefined;
     try {
       const res = await this.pool.query(
-        `SELECT id, github_user_id, github_login, token, created_at, expires_at
+        `SELECT id, github_user_id, github_login, avatar_url, token, created_at, expires_at
          FROM git_voice_sessions WHERE id = $1`,
         [id]
       );
@@ -116,6 +120,7 @@ export class SessionStore {
         id: row.id as string,
         githubUserId: row.github_user_id as number,
         githubLogin: row.github_login as string,
+        avatarUrl: (row.avatar_url as string) ?? "",
         token: row.token as string,
         createdAt: (row.created_at as Date).toISOString(),
         expiresAt: (row.expires_at as Date).toISOString()
