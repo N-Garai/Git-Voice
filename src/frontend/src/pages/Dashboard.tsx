@@ -39,16 +39,22 @@ export default function Dashboard(): JSX.Element {
   const [tier, setTier] = useState<Tier>("hobby");
 
   // Account + plan drive the nav chip, its tier badge, and the billing view.
-  useEffect(() => {
-    void api
-      .me()
-      .then((m) => setUser(m.user))
-      .catch(() => setUser(null));
+  const refreshTier = useCallback(() => {
     void api
       .billing()
       .then((b) => setTier(b.profile.tier))
       .catch(() => setTier("hobby"));
   }, []);
+  useEffect(() => {
+    void api
+      .me()
+      .then((m) => setUser(m.user))
+      .catch(() => setUser(null));
+    refreshTier();
+  }, [refreshTier]);
+  // Re-sync the tier when the view changes, so the nav chip and the settings
+  // card never lag behind a plan change made in another tab or session.
+  useEffect(refreshTier, [view, refreshTier]);
 
   const signOut = async () => {
     try {
@@ -64,8 +70,8 @@ export default function Dashboard(): JSX.Element {
       <DashNav view={view} tier={tier} user={user} onSignOut={() => void signOut()} />
       <div>
         {view === "issues" && <IssuesView />}
-        {view === "projects" && <ProjectsView />}
-        {view === "billing" && <BillingView signedIn={Boolean(user)} />}
+        {view === "projects" && <ProjectsView tier={tier} />}
+        {view === "billing" && <BillingView signedIn={Boolean(user)} onTierChange={refreshTier} />}
         {view === "settings" && <SettingsView user={user} tier={tier} />}
       </div>
     </div>
@@ -593,7 +599,18 @@ function money(cents: number): string {
   return `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}`;
 }
 
-function BillingView({ signedIn }: { signedIn: boolean }): JSX.Element {
+/** Turn "nayana/acme-store" into "Acme Store" — the repo's short name, humanized. */
+function suggestedName(repoFullName: string): string {
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repoFullName.trim())) return "";
+  const short = repoFullName.trim().split("/")[1];
+  return short
+    .replace(/[-_.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b[a-z]/g, (m) => m.toUpperCase());
+}
+
+function BillingView({ signedIn, onTierChange }: { signedIn: boolean; onTierChange?: () => void }): JSX.Element {
   const [state, setState] = useState<BillingState | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [receipt, setReceipt] = useState<Invoice | null>(null);
@@ -630,6 +647,7 @@ function BillingView({ signedIn }: { signedIn: boolean }): JSX.Element {
       await api.cancelPlan();
       setMessage("Plan will end at the close of the current period.");
       await load();
+      onTierChange?.();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     }
@@ -718,6 +736,7 @@ function BillingView({ signedIn }: { signedIn: boolean }): JSX.Element {
             setCheckoutOpen(false);
             setReceipt(inv);
             void load();
+            onTierChange?.();
           }}
         />
       )}
@@ -729,7 +748,7 @@ function BillingView({ signedIn }: { signedIn: boolean }): JSX.Element {
 
 /* ------------------------------------------------------------------- projects */
 
-function ProjectsView(): JSX.Element {
+function ProjectsView({ tier }: { tier: Tier }): JSX.Element {
   const [projects, setProjects] = useState<ProjectDto[] | null>(null);
   const [name, setName] = useState("");
   const [repo, setRepo] = useState("");
@@ -739,12 +758,42 @@ function ProjectsView(): JSX.Element {
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [ghRepos, setGhRepos] = useState<RepoListing[]>([]);
+  const [reposError, setReposError] = useState("");
   const [composer, setComposer] = useState<{ open: boolean; projectId: string; projectName: string } | null>(null);
 
   const [loadError, setLoadError] = useState("");
   const load = useCallback(async () => {
     const data = await api.projects();
     setProjects(data.projects);
+  }, []);
+
+  // The repo field doubles as the picker: a datalist offers the signed-in
+  // account's repositories, and any complete owner/repo entry — picked or
+  // pasted — suggests a project name so two fields never need filling twice.
+  // The suggestion only overwrites a name the user hasn't typed themselves.
+  const [nameAuto, setNameAuto] = useState(false);
+  const onRepoChange = (value: string) => {
+    setRepo(value);
+    if (!name.trim() || nameAuto) {
+      const auto = suggestedName(value);
+      if (auto) {
+        setName(auto);
+        setNameAuto(true);
+      }
+    }
+  };
+
+  const loadRepos = useCallback(() => {
+    void api
+      .repos()
+      .then((r) => {
+        setGhRepos(r.repos);
+        setReposError("");
+      })
+      .catch((err) => {
+        setGhRepos([]);
+        setReposError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err));
+      });
   }, []);
 
   useEffect(() => {
@@ -759,15 +808,13 @@ function ProjectsView(): JSX.Element {
     const params = new URLSearchParams(window.location.search);
     const flag = params.get("github");
     if (flag === "connected" || flag === "error") {
-      setMessage(flag === "connected" ? "GitHub connected — pick one of your repos below." : "GitHub login failed — please try again.");
+      setMessage(flag === "connected" ? "GitHub connected — your repositories are now in the repo field." : "GitHub login failed — please try again.");
       window.history.replaceState({}, "", window.location.pathname);
     }
     void api.me().then((m) => {
-      if (m.user) {
-        void api.repos().then((r) => setGhRepos(r.repos)).catch(() => setGhRepos([]));
-      }
+      if (m.user) loadRepos();
     }).catch(() => undefined);
-  }, [load]);
+  }, [load, loadRepos]);
 
   useEffect(() => {
     setTokenValue(token);
@@ -781,6 +828,7 @@ function ProjectsView(): JSX.Element {
       await api.createProject(name.trim(), repo.trim() || undefined);
       setName("");
       setRepo("");
+      setNameAuto(false);
       await load();
       setMessage("Project created.");
     } catch (err) {
@@ -898,7 +946,31 @@ function ProjectsView(): JSX.Element {
       <div className="empty">
         <div className="big">🔒</div>
         <p>{loadError}</p>
-        <button className="btn btn-primary mt-16" onClick={() => window.location.reload()}>Unlock</button>
+        <a className="btn btn-primary mt-16" href="/api/auth/github">Sign in with GitHub</a>
+        <p className="mono-xs text-faint mt-16">
+          Running this dashboard as the deployment owner instead? Paste the dashboard token:
+        </p>
+        <div style={{ maxWidth: 340, margin: "0 auto", display: "flex", flexDirection: "column", gap: 10 }}>
+          <input
+            className="coupon-input-field"
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="Operator dashboard token"
+            autoComplete="off"
+          />
+          <button
+            className="btn btn-ghost btn-sm"
+            disabled={!token.trim()}
+            onClick={() => {
+              void load().catch(() => {
+                setLoadError("That token was not accepted — check the deployment's dashboard token.");
+              });
+            }}
+          >
+            Load projects with this token
+          </button>
+        </div>
       </div>
     );
   }
@@ -972,52 +1044,52 @@ function ProjectsView(): JSX.Element {
 
       <div className="card mt-24">
         <h3 style={{ fontFamily: "var(--font-display)", marginBottom: 14 }}>Add a project</h3>
-        {ghRepos.length > 0 && (
-          <div style={{ marginBottom: 12 }}>
-            <select
-              className="coupon-input-field"
-              value=""
-              onChange={(e) => { if (e.target.value) setRepo(e.target.value); }}
-              aria-label="Pick one of your GitHub repositories"
-            >
-              <option value="">Pick one of your GitHub repos…</option>
-              {ghRepos.map((r) => (
-                <option key={r.fullName} value={r.fullName}>
-                  {r.fullName}{r.isPrivate ? " (private)" : ""}
-                </option>
-              ))}
-            </select>
-          </div>
+        {reposError && (
+          <p className="mono-xs" style={{ color: "var(--red)", marginBottom: 12 }}>
+            Could not load your repositories — {reposError}.{" "}
+            <button className="btn btn-ghost btn-sm" onClick={loadRepos}>Retry</button>
+          </p>
         )}
         <div className="grid-2" style={{ gap: 12 }}>
           <input
             className="coupon-input-field"
             placeholder="Project name (e.g. Acme staging)"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => { setName(e.target.value); setNameAuto(false); }}
           />
           <input
             className="coupon-input-field"
-            placeholder="GitHub repo (owner/repo, optional)"
+            placeholder={
+              ghRepos.length > 0
+                ? "GitHub repo — open for your repos, or paste owner/repo"
+                : "GitHub repo (owner/repo, optional)"
+            }
             value={repo}
-            onChange={(e) => setRepo(e.target.value)}
+            onChange={(e) => onRepoChange(e.target.value)}
+            list={ghRepos.length > 0 ? "gv-your-repos" : undefined}
+            autoComplete="off"
           />
+          {ghRepos.length > 0 && (
+            <datalist id="gv-your-repos">
+              {ghRepos.map((r) => (
+                <option key={r.fullName} value={r.fullName}>
+                  {r.isPrivate ? "private" : "public"}
+                </option>
+              ))}
+            </datalist>
+          )}
         </div>
-        <div className="mt-16">
-          <input
-            className="coupon-input-field"
-            type="password"
-            placeholder={getToken() ? "Dashboard token — saved ✓" : "Operator dashboard token (optional)"}
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-          />
-        </div>
+        {ghRepos.length > 0 && tier === "hobby" && (
+          <p className="mono-xs text-faint" style={{ marginTop: 6 }}>
+            The Hobby plan lists your public repositories — private ones unlock on Freelancer.
+          </p>
+        )}
         <button className="btn btn-primary mt-16" disabled={busy === "create" || !name.trim()} onClick={() => void create()}>
           {busy === "create" ? "Creating…" : "Create project"}
         </button>
         <p className="mono-xs text-faint mt-8">
-          Any public repo (owner/repo) indexes without logging in. Sign in with GitHub and your
-          private repos work too — issues are always filed under your own GitHub identity.
+          Any public repo (owner/repo) indexes without logging in. Private repositories index with a
+          signed-in account on Freelancer and above — issues are always filed under your own GitHub identity.
         </p>
       </div>
 

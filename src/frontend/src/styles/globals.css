@@ -665,7 +665,7 @@ button { font-family: inherit; cursor: pointer; }
 .cart-line { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px dashed var(--line); color: var(--ink-dim); font-size: 14px; }
 .coupon-row { display: flex; gap: 8px; margin: 16px 0 8px; }
 .coupon-input-field {
-  flex: 1; background: #0a0f16; border: 1px solid var(--line-bright); color: var(--ink);
+  flex: 1; min-width: 0; background: #0a0f16; border: 1px solid var(--line-bright); color: var(--ink);
   border-radius: 9px; padding: 10px 12px; font-family: var(--font-mono); font-size: 14px;
 }
 .coupon-input-field.err { border-color: var(--red); animation: shake 0.35s; }

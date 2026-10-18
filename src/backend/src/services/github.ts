@@ -193,3 +193,28 @@ export async function listUserRepos(userToken: string): Promise<RepoListing[]> {
       defaultBranch: r.default_branch ?? "main"
     }));
 }
+
+/**
+ * Read the static privacy flag of one repository (`owner/repo`).
+ *
+ * Works with the owner's token or unauthenticated (public repos resolve
+ * either way). Throws on unreachable answers; callers decide how strictly
+ * to treat that — a failed lookup must never silently upgrade what the
+ * pricing page promises.
+ */
+export async function repoIsPrivate(fullName: string, userToken?: string): Promise<boolean> {
+  const [owner, repo] = fullName.split("/");
+  if (!owner || !repo) throw new Error("Repo must look like owner/repo");
+  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "git-voice",
+      ...(userToken ? { Authorization: `Bearer ${userToken}` } : {})
+    },
+    signal: AbortSignal.timeout(20_000)
+  });
+  if (!res.ok) throw new Error(`GitHub repo lookup failed (HTTP ${res.status})`);
+  const data = (await res.json()) as { private?: boolean };
+  return data.private === true;
+}

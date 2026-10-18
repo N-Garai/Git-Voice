@@ -31,7 +31,8 @@ import {
   verifyWebhookSignature,
   oauthAuthorizeUrl,
   exchangeOAuthCode,
-  listUserRepos
+  listUserRepos,
+  repoIsPrivate
 } from "../services/github.js";
 import {
   sessionStore,
@@ -403,6 +404,33 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
       }
     }
 
+    // The pricing page sells private repositories as a paid capability, so
+    // the create route verifies the repo's privacy up front instead of
+    // letting an index failure explain it later. A lookup that can't be
+    // confirmed defers to the indexer, which reports the real problem.
+    if (repoFullName) {
+      const ownerProfile = ownerLogin ? billingStore.profile(ownerLogin) : undefined;
+      const privateKnown = ownerProfile ? hasEntitlement(ownerProfile.tier, "private-repos") : false;
+      if (!privateKnown) {
+        let isPrivate: boolean;
+        try {
+          isPrivate = await repoIsPrivate(repoFullName, who.session?.token);
+        } catch {
+          isPrivate = false;
+        }
+        if (isPrivate) {
+          return c.json(
+            {
+              error: `The ${BILLING_PLANS[ownerProfile?.tier ?? "hobby"].label} plan indexes public repositories only — private repositories need the Freelancer plan or above.`,
+              tier: ownerProfile?.tier ?? "hobby",
+              upgrade: true
+            },
+            403
+          );
+        }
+      }
+    }
+
     // The creator's GitHub login becomes the project's owner. Every later
     // action on this project (index, publish) uses *their* token — the
     // server operator's credentials are never involved.
@@ -442,31 +470,38 @@ const targetProject = projectId ? projectStore.get(projectId) : undefined;
 
     projectStore.upsert({ ...project, indexStatus: "indexing", indexError: undefined });
 
-// Only ever the project owner's own credential: the operator's token is
+    // Only ever the project owner's own credential: the operator's token is
     // never used, so indexing can never touch a repo the owner cannot read.
-    // Private repositories are a paid capability.
+    // Private repositories are a paid capability; public ones index on every
+    // plan, which is exactly what the pricing page promises.
     const ownerProfile = project.ownerLogin ? billingStore.profile(project.ownerLogin) : undefined;
-    const privateAllowed = ownerProfile
-      ? hasEntitlement(ownerProfile.tier, "private-repos")
-      : true; // operator-triggered indexing on a repo they configured
+    const privateKnown = ownerProfile ? hasEntitlement(ownerProfile.tier, "private-repos") : true;
     const ownerToken =
-      project.ownerLogin && privateAllowed
-        ? await sessionStore.tokenForLogin(project.ownerLogin)
-        : undefined;
-    if (project.ownerLogin && !privateAllowed) {
-      await projectStore.upsert({
-        ...project,
-        indexStatus: "failed",
-        indexError: "Private repository indexing requires the Freelancer plan or above."
-      });
-      return c.json(
-        {
-          error: "Private repository indexing is available on the Freelancer plan and above.",
-          tier: ownerProfile?.tier,
-          upgrade: true
-        },
-        402
-      );
+      project.ownerLogin && !isDemo ? await sessionStore.tokenForLogin(project.ownerLogin) : undefined;
+    if (ownerProfile && !privateKnown && repoInput) {
+      // Only block when GitHub confirms the repo really is private — a lookup
+      // that cannot be answered is the indexer's own failure to report.
+      let isPrivate: boolean;
+      try {
+        isPrivate = await repoIsPrivate(repoInput, ownerToken);
+      } catch {
+        isPrivate = false;
+      }
+      if (isPrivate) {
+        await projectStore.upsert({
+          ...project,
+          indexStatus: "failed",
+          indexError: "Private repository indexing requires the Freelancer plan or above."
+        });
+        return c.json(
+          {
+            error: "Private repository indexing is available on the Freelancer plan and above.",
+            tier: ownerProfile.tier,
+            upgrade: true
+          },
+          402
+        );
+      }
     }
 
     try {
@@ -684,7 +719,13 @@ const session = await sessionStore.create(
     const session = await sessionFromCookie(c.req.header("cookie"));
     if (!session) return c.json({ error: "Login with GitHub first" }, 401);
     try {
-      return c.json({ repos: await listUserRepos(session.token) });
+      // The picker matches the plan: without the private-repos entitlement
+      // the dropdown lists only public repositories (a pasted private one is
+      // still rejected by the plan gate on create/index).
+      const all = await listUserRepos(session.token);
+      const tier = billingStore.profile(session.githubLogin).tier;
+      const repos = hasEntitlement(tier, "private-repos") ? all : all.filter((r) => !r.isPrivate);
+      return c.json({ repos, plan: tier, publicOnly: !hasEntitlement(tier, "private-repos") });
     } catch {
       return c.json({ error: "Could not list repositories — try logging in again" }, 502);
     }
