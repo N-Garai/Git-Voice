@@ -245,8 +245,11 @@
 }
 .cmp-f { color: var(--ink); font-weight: 500; }
 .cmp-hi { background: rgba(34, 211, 238, 0.05); margin: -13px 0; padding: 13px 8px; border-inline: 1px solid rgba(34, 211, 238, 0.14); }
-.cmp-hi.yes { color: var(--cyan); font-weight: 600; }
+/* Capability states: a plain check for included, a muted dash for not. */
+.cmp-yes { color: var(--cyan); font-weight: 700; font-size: 15px; }
+.cmp-no { color: var(--ink-faint); opacity: 0.55; }
 .cmp-row > span:not(.cmp-f) { text-align: center; }
+.cmp-row > span.cmp-hi { text-align: center; }
 
 @media (max-width: 760px) {
   .cmp-row { grid-template-columns: 1.2fr 1fr 1fr 1fr; font-size: 12px; padding: 11px 4px; }

@@ -1,45 +1,29 @@
-/** The full pricing page — animated tiers, feature comparison, pricing FAQ. */
+/** The full pricing page — animated tiers, feature comparison, and FAQ. */
 import { useEffect, useState } from "react";
 import { SiteHeader, SiteFooter } from "../components/Chrome";
 import { useScrollReveal, SplitChars, prefersReducedMotion, usePageReveals } from "../hooks/animations";
 import { useRevealWords } from "../hooks/motion";
 import { navigate } from "../lib/router";
-import { PLANS } from "../data/plans";
+import { PLANS, COMPARISON, FAQ } from "../data/plans";
 
-const COMPARISON: Array<{ feature: string; hobby: string; freelancer: string; agency: string }> = [
-  { feature: "Project staging links", hobby: "1", freelancer: "1 / month slot", agency: "4 included" },
-  { feature: "Issues per month", hobby: "10", freelancer: "Unlimited", agency: "Unlimited" },
-  { feature: "Voice confirmation", hobby: "Browser voice", freelancer: "Premium voice", agency: "Premium voice" },
-  { feature: "Issue drafting", hobby: "Offline engine", freelancer: "Model-drafted", agency: "Model-drafted" },
-  { feature: "Architecture index", hobby: "✓", freelancer: "✓", agency: "✓ + pgvector" },
-  { feature: "Auto re-index on push", hobby: "—", freelancer: "✓", agency: "✓" },
-  { feature: "Draft review gate", hobby: "—", freelancer: "✓", agency: "✓" },
-  { feature: "Per-client routing", hobby: "—", freelancer: "—", agency: "✓" },
-  { feature: "Support", hobby: "Community", freelancer: "Email", agency: "Priority" }
-];
-
-const FAQ = [
-  {
-    q: "Is the free tier actually usable?",
-    a: "Yes — the machine runs fully offline by design: browser speech capture, deterministic drafting, and dashboard drafts. Hobby is a real working tier, not a trial."
-  },
-  {
-    q: "How does per-project billing work?",
-    a: "A \"project\" is one staging link (one embeddable widget install). Freelancer covers one project per month slot; Agency bundles four."
-  },
-  {
-    q: "Do I need API keys to start?",
-    a: "No. Every key — model drafting, hosted embeddings, premium voice, GitHub publishing, pgvector — is optional and upgrades exactly one station of the pipeline."
-  },
-  {
-    q: "What happens to unpublishable reports?",
-    a: "If the GitHub publishing token is missing or a model call fails, the report degrades to a fully-formed dashboard draft — nothing is ever lost."
-  },
-  {
-    q: "Can I self-host?",
-    a: "Yes — Apache-2.0 licensed, single Docker image, sized for free-tier containers. Your client data never has to leave infrastructure you control."
+/** "—" for capabilities a tier does not include, "✓" for included ones. */
+function Cell({ value }: { value: string | null }): JSX.Element {
+  if (value === null) {
+    return (
+      <span className="cmp-no" role="cell" aria-label="Not included">
+        —
+      </span>
+    );
   }
-];
+  if (value === "Included") {
+    return (
+      <span className="cmp-yes" role="cell" aria-label="Included">
+        ✓
+      </span>
+    );
+  }
+  return <span role="cell">{value}</span>;
+}
 
 export default function Pricing(): JSX.Element {
   usePageReveals();
@@ -105,9 +89,11 @@ export default function Pricing(): JSX.Element {
                 {COMPARISON.map((row) => (
                   <div className="cmp-row" role="row" key={row.feature}>
                     <span className="cmp-f" role="cell">{row.feature}</span>
-                    <span role="cell">{row.hobby}</span>
-                    <span className={`cmp-hi${row.freelancer !== "—" ? " yes" : ""}`} role="cell">{row.freelancer}</span>
-                    <span role="cell">{row.agency}</span>
+                    <Cell value={row.hobby} />
+                    <span className="cmp-hi" role="presentation">
+                      <Cell value={row.freelancer} />
+                    </span>
+                    <Cell value={row.agency} />
                   </div>
                 ))}
               </div>
@@ -119,7 +105,7 @@ export default function Pricing(): JSX.Element {
           <div className="shell">
             <div className="section-head reveal">
               <span className="kicker">FAQ</span>
-              <h2 className="h2"><SplitChars text="Pricing questions" /></h2>
+              <h2 className="h2"><SplitChars text="Frequently asked questions" /></h2>
             </div>
             <div className="faq reveal-stagger" ref={faq.ref}>
               {FAQ.map((f) => (
@@ -146,6 +132,7 @@ function PriceCard({ plan }: { plan: (typeof PLANS)[number] }): JSX.Element {
       {plan.featured && <span className="pc-flag">Most wired</span>}
       <span className="tier">{plan.tier}</span>
       <div className="price">{plan.price} <small>{plan.per}</small></div>
+      <p className="text-dim" style={{ fontSize: 13.5, margin: "10px 0 4px" }}>{plan.tagline}</p>
       <ul>
         {plan.features.map((f) => <li key={f}>{f}</li>)}
       </ul>
