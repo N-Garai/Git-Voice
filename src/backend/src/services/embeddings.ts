@@ -11,6 +11,7 @@
  * remain explainable (keyword leg still ranks cross-embedder entries fine).
  */
 import { config } from "../config.js";
+import { embeddingsSpan } from "./sentry.js";
 
 export interface EmbeddingResult {
   vector: number[];
@@ -94,35 +95,37 @@ async function geminiEmbedBatch(texts: string[], taskType: string): Promise<numb
     for (let attempt = 0; attempt < 4 && !success; attempt++) {
       if (attempt > 0) await sleep(800 * 2 ** attempt);
       try {
-        const res = await fetch(
-          `${GEMINI_EMBED_ENDPOINT}/${config.gemini.embeddingModelId}:batchEmbedContents?key=${encodeURIComponent(key)}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              requests: batch.map((text) => ({
-                model: `models/${config.gemini.embeddingModelId}`,
-                content: { parts: [{ text: text.slice(0, 6000) }] },
-                taskType,
-                outputDimensionality: config.gemini.embeddingDim
-              }))
-            }),
-            signal: AbortSignal.timeout(30_000)
+        const values = await embeddingsSpan({ modelId: config.gemini.embeddingModelId, count: batch.length }, async () => {
+          const res = await fetch(
+            `${GEMINI_EMBED_ENDPOINT}/${config.gemini.embeddingModelId}:batchEmbedContents?key=${encodeURIComponent(key)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                requests: batch.map((text) => ({
+                  model: `models/${config.gemini.embeddingModelId}`,
+                  content: { parts: [{ text: text.slice(0, 6000) }] },
+                  taskType,
+                  outputDimensionality: config.gemini.embeddingDim
+                }))
+              }),
+              signal: AbortSignal.timeout(30_000)
+            }
+          );
+          if (res.status === 429 || res.status >= 500) {
+            throw new Error(`Embedding API responded ${res.status}`);
           }
-        );
-        if (res.status === 429 || res.status >= 500) {
-          lastError = new Error(`Embedding API responded ${res.status}`);
-          continue;
-        }
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          throw new Error(`Embedding API error ${res.status}: ${body.slice(0, 200)}`);
-        }
-        const data = (await res.json()) as { embeddings?: Array<{ values?: number[] }> };
-        const values = data.embeddings?.map((e) => e.values ?? []) ?? [];
-        if (values.length !== batch.length) {
-          throw new Error("Embedding API returned an unexpected shape");
-        }
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            throw new Error(`Embedding API error ${res.status}: ${body.slice(0, 200)}`);
+          }
+          const data = (await res.json()) as { embeddings?: Array<{ values?: number[] }> };
+          const vectors = data.embeddings?.map((e) => e.values ?? []) ?? [];
+          if (vectors.length !== batch.length) {
+            throw new Error("Embedding API returned an unexpected shape");
+          }
+          return vectors;
+        });
         out.push(...values);
         success = true;
       } catch (err) {

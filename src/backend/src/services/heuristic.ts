@@ -142,7 +142,7 @@ export function synthesizeIssueHeuristically(input: HeuristicInput): DraftIssue 
     `and ${telemetry.clicks.length} interaction breadcrumbs.` +
     transcriptSnippet;
 
-  const labels = ["bug", "staging", `severity:${severity}`, "git-voice"];
+  const labels = ["bug", "client-report", `severity:${severity}`, "git-voice"];
 
   return {
     title,

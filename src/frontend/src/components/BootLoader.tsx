@@ -1,5 +1,5 @@
 /**
- * The boot loader — a machine-themed, ~10 spower-up sequence that gates the
+ * The boot loader — a machine-themed, ~10 s power-up sequence that gates the
  * landing page. Boot log lines type in, seven station gauges fill, a progress
  * console counts to 100%, then the whole screen lifts away with a shutter wipe
  * and the hero enters.

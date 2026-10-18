@@ -32,6 +32,8 @@ export interface TraceSink {
   fail(stepId: string, durationMs: number, error: string): void;
 }
 
+import { startToolSpan, withToolSpan } from "../services/sentry.js";
+
 export async function runWorkflow<C extends object>(
   steps: Array<WorkflowStep<C>>,
   ctx: C,
@@ -43,11 +45,7 @@ export async function runWorkflow<C extends object>(
     const t0 = Date.now();
     trace.start(step);
     try {
-      const patch = await step.run(ctx, {
-        onProgress: () => {
-          /* reserved for future streaming updates */
-        }
-      });
+      const patch = await stepRun(step, ctx);
       if (patch) Object.assign(ctx, patch);
       trace.complete(step.stepId, Date.now() - t0);
     } catch (err) {
@@ -58,4 +56,16 @@ export async function runWorkflow<C extends object>(
   }
 
   return { ok: true, durationMs: Date.now() - startedAt };
+}
+
+/** One station run, optionally traced as a Sentry tool span. Pass-through
+ * without SENTRY_DSN — the station then runs exactly as before. */
+async function stepRun<C extends object>(step: WorkflowStep<C>, ctx: C): Promise<Partial<C> | void> {
+  const helpers: StepHelpers<C> = {
+    onProgress: () => {
+      /* reserved for future streaming updates */
+    }
+  };
+  const span = startToolSpan(step.stepId, step.name);
+  return withToolSpan(span, step.stepId, () => step.run(ctx, helpers));
 }

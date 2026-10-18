@@ -78,11 +78,23 @@ function entitlementsFor(project: Project): { hostedDrafting: boolean; premiumVo
   };
 }
 
-/** Owner preferences that change what a filed report contains. */
-function preferencesFor(project: Project): { voiceConfirmation: boolean; includeTelemetry: boolean } {
-  if (!project.ownerLogin) return { voiceConfirmation: true, includeTelemetry: true };
+/** Owner preferences that change what a filed report contains and where it goes. */
+function preferencesFor(project: Project): {
+  voiceConfirmation: boolean;
+  draftReview: boolean;
+  includeTelemetry: boolean;
+  transcriptPreference: "auto" | "voice" | "typed";
+} {
+  if (!project.ownerLogin) {
+    return { voiceConfirmation: true, draftReview: false, includeTelemetry: true, transcriptPreference: "auto" };
+  }
   const prefs = preferenceStore.get(project.ownerLogin);
-  return { voiceConfirmation: prefs.voiceConfirmation, includeTelemetry: prefs.includeTelemetry };
+  return {
+    voiceConfirmation: prefs.voiceConfirmation,
+    draftReview: prefs.draftReview,
+    includeTelemetry: prefs.includeTelemetry,
+    transcriptPreference: prefs.transcriptPreference
+  };
 }
 
 const UNAUTHORIZED = { error: "Unauthorized — log in with GitHub or provide the dashboard token." };

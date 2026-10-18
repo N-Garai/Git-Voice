@@ -107,7 +107,7 @@ function PortalShowcase(): JSX.Element {
                   <div className="is-row"><span className="k">viewport</span><span className="v mono">820×1180 · iPad Safari</span></div>
                   <div className="labels">
                     <span className="label red">bug</span>
-                    <span className="label blue">staging</span>
+                    <span className="label blue">client-report</span>
                     <span className="label red">severity:high</span>
                     <span className="label violet">git-voice</span>
                   </div>

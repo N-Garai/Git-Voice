@@ -29,7 +29,7 @@ export interface PlanSpec {
   /** Amount in whole cents; avoids float rounding on invoices. */
   amountCents: number;
   currency: "USD";
-  /** How many staging links the tier allows. */
+  /** How many client projects the tier allows. */
   projectLimit: number;
   entitlements: Entitlement[];
 }

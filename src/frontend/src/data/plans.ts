@@ -41,7 +41,7 @@ export const PLANS: Plan[] = [
     per: "per month, per project",
     amountCents: 1500,
     featured: true,
-    cta: "Wire your staging site",
+    cta: "Connect your project",
     to: "/demo",
     tagline: "Private repos and model-drafted issues for one client project.",
     features: [
@@ -91,7 +91,7 @@ export const COMPARISON: ComparisonRow[] = [
   { feature: "Private repositories", hobby: null, freelancer: "Included", agency: "Included" },
   { feature: "Spoken confirmation", hobby: "Browser voice", freelancer: "Premium voice", agency: "Premium voice" },
   { feature: "Issue drafting", hobby: "Offline engine", freelancer: "Model-drafted", agency: "Model-drafted" },
-  { feature: "Suspected-file matching", hobby: "Keyword", freelancer: "Vector + keyword", agency: "Vector + keyword" },
+  { feature: "Hybrid file matching", hobby: "Included", freelancer: "Included", agency: "Included" },
   { feature: "Re-index on push", hobby: null, freelancer: "Automatic", agency: "Automatic" },
   { feature: "Issue published as", hobby: "Your sign-in", freelancer: "Your sign-in", agency: "Each client's sign-in" },
   { feature: "Support", hobby: "Community", freelancer: "Email", agency: "Priority" }

@@ -26,8 +26,12 @@ import { llmConfigured } from "./services/gemini.js";
 import { sessionStore } from "./store/sessions.js";
 import { billingStore } from "./billing/billing.js";
 import { preferenceStore } from "./store/preferences.js";
+import { initSentry, flushSentry } from "./services/sentry.js";
 
 async function main(): Promise<void> {
+  // Observability first: spans for everything the process does after this
+  // point attach to the Sentry trace. Without SENTRY_DSN this is a no-op.
+  initSentry();
   const index = await createVectorIndex();
   await projectStore.hydrate();
   // Restore report records before serving, so a restart or free-tier sleep
@@ -80,10 +84,12 @@ async function main(): Promise<void> {
         `embeddings: ${activeEmbedder().configured ? "hosted" : "hashed (offline)"} · ` +
         `index: ${index.backendName}`
     );
+    startKeepWarm();
   });
 
   const shutdown = async () => {
     console.log("[git-voice] shutting down…");
+    await flushSentry().catch(() => {});
     await index.close().catch(() => {});
     await projectStore.close().catch(() => {});
     await issueStore.close().catch(() => {});
@@ -100,3 +106,47 @@ main().catch((err) => {
   console.error("[git-voice] fatal boot error:", err);
   process.exit(1);
 });
+
+/**
+ * Keep-warm layer.
+ *
+ * Free-tier web services sleep after ~15 minutes without an inbound request,
+ * and the first visitor then waits ~50 s for the restart. When the server
+ * knows its public address (APP_BASE_URL) and runs in production, it pings its
+ * own public /health every 13.5 minutes — just inside the idle window — so the
+ * gap between requests never reaches the sleep threshold. Traffic to the public
+ * URL passes the platform edge, which is what resets the idle timer.
+ *
+ * Set KEEP_WARM=off to disable (e.g. on a paid plan or a dedicated box).
+ */
+const KEEP_WARM_INTERVAL_MS = 13.5 * 60 * 1000;
+
+function keepWarmTarget(): string | null {
+  if (process.env.KEEP_WARM === "off") return null;
+  if (config.nodeEnv !== "production") return null;
+  // Ping only real deployments: localhost traffic never reaches a platform's
+  // edge router, so it cannot reset the idle timer.
+  if (/\/\/(localhost|127\.0\.0\.1)/.test(config.baseUrl)) return null;
+  if (!/^https?:\/\//.test(config.baseUrl)) return null;
+  return `${config.baseUrl.replace(/\/+$/, "")}/health`;
+}
+
+function startKeepWarm(): void {
+  const target = keepWarmTarget();
+  if (!target) return;
+  const timer = setInterval(() => {
+    fetch(target)
+      .then((res) => {
+        if (!res.ok) console.warn(`[keep-warm] self-ping answered ${res.status}`);
+      })
+      .catch((err: unknown) => {
+        // Degraded log only: a missed ping at worst costs one cold start.
+        console.warn("[keep-warm] self-ping failed:", err instanceof Error ? err.message : err);
+      });
+  }, KEEP_WARM_INTERVAL_MS);
+  timer.unref();
+  console.log(
+    `[git-voice] keep-warm: pinging ${target} every ${Math.round(KEEP_WARM_INTERVAL_MS / 60000)} min` +
+      ` (inside the ~15 min idle window)`
+  );
+}

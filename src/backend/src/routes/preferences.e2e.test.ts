@@ -29,10 +29,10 @@ async function cookie(login: string, id: number) {
 }
 
 describe("preferences defaults", () => {
-  it("starts every account with sensible defaults", () => {
+  it("starts every account with auto-file semantics", () => {
     const prefs = preferenceStore.get("newcomer");
     expect(prefs.voiceConfirmation).toBe(true);
-    expect(prefs.draftReview).toBe(true);
+    expect(prefs.draftReview).toBe(false);
     expect(prefs.includeTelemetry).toBe(true);
     expect(prefs.transcriptPreference).toBe("auto");
   });

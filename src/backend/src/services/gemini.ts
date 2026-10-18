@@ -8,6 +8,7 @@
  * offline deterministic paths — this module never throws past its boundary.
  */
 import { config } from "../config.js";
+import { modelSpan, recordModelOutcome } from "./sentry.js";
 
 const BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -17,7 +18,13 @@ interface GeminiPart {
 }
 
 interface GeminiResponse {
-  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>;
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    cachedContentTokenCount?: number;
+    totalTokenCount?: number;
+  };
   error?: { message?: string };
 }
 
@@ -35,46 +42,73 @@ const MODEL_TIMEOUT_MS = 70_000;
 async function generateOnce(
   modelId: string,
   parts: GeminiPart[],
-  jsonMode: boolean,
   timeoutMs: number
 ): Promise<string> {
   const key = config.gemini.apiKey;
   if (!key) throw new Error("No model API key configured");
 
-  const res = await fetch(`${BASE}/${modelId}:generateContent?key=${encodeURIComponent(key)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts }],
-      generationConfig: {
-        temperature: jsonMode ? 0.2 : 0,
-        ...(jsonMode ? { responseMimeType: "application/json" } : {})
+  // One hosted call = one `gen_ai.chat` span with token-usage attributes, so
+  // the run's latency, tokens and model cost are visible in the trace. Audio
+  // bytes never ride on span attributes — only the textual prompt does.
+  const promptText = parts
+    .map((p) => p.text)
+    .filter((t): t is string => Boolean(t))
+    .join("\n");
+
+  return modelSpan({ modelId, inputText: promptText, temperature: 0 }, async (span) => {
+    const res = await fetch(`${BASE}/${modelId}:generateContent?key=${encodeURIComponent(key)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts }],
+        // Deterministic, structured outputs only — callers parse the text strictly.
+        generationConfig: { temperature: 0 }
+      }),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+
+    const markHttpFailure = () => {
+      if (!span) return;
+      span.setStatus({ code: 2, message: "internal_error" });
+      span.setAttribute("error.type", `ModelHttp${res.status}`);
+    };
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      markHttpFailure();
+      throw new Error(`Model API error ${res.status}: ${body.slice(0, 300)}`);
+    }
+
+    const data = (await res.json()) as GeminiResponse;
+    const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+    if (!text.trim()) {
+      if (span) {
+        span.setStatus({ code: 2, message: "internal_error" });
+        span.setAttribute("error.type", "EmptyCompletion");
       }
-    }),
-    signal: AbortSignal.timeout(timeoutMs)
+      throw new Error("Model returned an empty completion");
+    }
+
+    recordModelOutcome(span, {
+      usage: data.usageMetadata,
+      responseModel: modelId,
+      outputText: text,
+      finishReason: data.candidates?.[0]?.finishReason
+    });
+    return text;
   });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Model API error ${res.status}: ${body.slice(0, 300)}`);
-  }
-
-  const data = (await res.json()) as GeminiResponse;
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-  if (!text.trim()) throw new Error("Model returned an empty completion");
-  return text;
 }
 
-async function generate(modelId: string, parts: GeminiPart[], jsonMode: boolean): Promise<string> {
+async function generate(modelId: string, parts: GeminiPart[]): Promise<string> {
   try {
-    return await generateOnce(modelId, parts, jsonMode, MODEL_TIMEOUT_MS);
+    return await generateOnce(modelId, parts, MODEL_TIMEOUT_MS);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const transient = /timeout|aborted|429|500|502|503|504/i.test(message);
     if (!transient) throw err;
     // One shorter retry: transient queueing usually clears immediately.
     await new Promise((r) => setTimeout(r, 1200));
-    return generateOnce(modelId, parts, jsonMode, 35_000);
+    return generateOnce(modelId, parts, 35_000);
   }
 }
 
@@ -96,8 +130,7 @@ export async function transcribeAudio(
           "Keep the casual tone and any product names, button labels, or codes they mention. " +
           "Output only the transcript text."
       }
-    ],
-    false
+    ]
   );
   return { text: text.trim(), model: config.gemini.transcribeModelId };
 }
@@ -169,6 +202,6 @@ export async function draftIssueJson(input: DraftPromptInput): Promise<{
   model: string;
 }> {
   const { parts, model } = buildDraftPrompt(input);
-  const raw = await generate(model, parts, false);
+  const raw = await generate(model, parts);
   return { parsed: extractJson(raw), model };
 }

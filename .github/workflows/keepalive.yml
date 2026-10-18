@@ -1,0 +1,33 @@
+
+name: keep-warm
+
+# Free-tier web services sleep after ~15 minutes without inbound traffic. This
+# workflow pings the live deployment every 14 minutes — just inside that
+# window — as an outer safety net around the server's own in-process keep-warm
+# pinger (src/backend/src/index.ts). A deployment that already fell asleep is
+# woken by this one, so the first visitor never sees a cold start.
+#
+# Scheduled GitHub Actions run on a best-effort clock and can drift by tens of
+# minutes, which is why the precise timing lives in the server itself; this job
+# covers deployments that were sleeping before the first ping and actors that
+# fork the repo with a differently-defined placement URL.
+on:
+  schedule:
+    # Fires at :00 :14 :28 :42 :56 UTC — the largest gap is 14 minutes, under
+    # the 15-minute idle threshold.
+    - cron: "*/14 * * * *"
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the deployment health endpoint
+        env:
+          # Ships with the public demo URL so the workflow works with zero
+          # repo configuration; fork hosts can point it anywhere via a
+          # repository variable (Settings → Secrets and variables → Variables).
+          KEEPALIVE_URL: ${{ vars.KEEPALIVE_URL || 'https://git-voice-sh7k.onrender.com' }}
+        run: curl -fsS --retry 3 --retry-delay 5 -m 30 "$KEEPALIVE_URL/health"

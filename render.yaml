@@ -45,3 +45,10 @@ services:
       # (leave empty for local dev — reads then require a GitHub login).
       - key: DASHBOARD_TOKEN
         sync: false
+      # Agent tracing (optional). Set a Sentry project DSN to enable tracing
+      # of the pipeline (agent span, station tool spans, model calls with
+      # token usage + cost). Leave empty to run with zero observability
+      # overhead. SENTRY_CONTENT=off additionally keeps report content off
+      # span attributes.
+      - key: SENTRY_DSN
+        sync: false

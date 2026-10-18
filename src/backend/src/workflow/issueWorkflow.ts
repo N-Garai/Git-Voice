@@ -37,6 +37,7 @@ import { createGitHubIssue } from "../services/github.js";
 import { sessionStore } from "../store/sessions.js";
 import { activeEmbedder } from "../services/embeddings.js";
 import { runWorkflow, type WorkflowStep } from "./engine.js";
+import { sentryEnabled, runTracedAgent, contentCaptured } from "../services/sentry.js";
 
 export interface PipelineContext {
   issueId: string;
@@ -83,9 +84,19 @@ export interface PipelineOptions {
   /**
    * Owner preferences from the dashboard Settings tab. `voiceConfirmation:false`
    * suppresses the spoken reply; `includeTelemetry:false` keeps captured console
-   * output and click breadcrumbs out of the drafted body.
+   * output and click breadcrumbs out of the drafted body. `draftReview:true`
+   * keeps every report as a dashboard draft instead of filing straight to
+   * GitHub. `transcriptPreference` picks which transcript the report trusts
+   * when both a browser transcript and the recording are available: "typed"
+   * always keeps the browser text, "voice" re-transcribes the recording on the
+   * server, "auto" keeps whatever the browser produced.
    */
-  preferences?: { voiceConfirmation: boolean; includeTelemetry: boolean };
+  preferences?: {
+    voiceConfirmation: boolean;
+    draftReview: boolean;
+    includeTelemetry: boolean;
+    transcriptPreference: "auto" | "voice" | "typed";
+  };
 }
 
 /** Stand-in telemetry used when the owner opts out of including captured data. */
@@ -164,7 +175,7 @@ function sanitizeLabels(modelLabels: unknown, severity: Severity): string[] {
   const extras = Array.isArray(modelLabels)
     ? modelLabels.filter((l): l is string => typeof l === "string" && l.length <= 30).slice(0, 3)
     : [];
-  return [...new Set(["bug", "staging", `severity:${severity}`, ...extras])].slice(0, 6);
+  return [...new Set(["bug", "client-report", `severity:${severity}`, ...extras])].slice(0, 6);
 }
 
 function coerceDraft(parsed: Record<string, unknown>, fallback: DraftIssue): DraftIssue {
@@ -210,10 +221,13 @@ export async function runIssuePipeline(
   const canDraft = options.entitlements?.hostedDrafting ?? true;
   const canSpeak = options.entitlements?.premiumVoice ?? true;
   const useHostedModel = hostedAllowed && canDraft;
-  // Owner settings: whether to speak, and whether captured telemetry is copied
-  // into the drafted issue body.
+  // Owner settings: whether to speak, whether captured telemetry is copied
+  // into the drafted body, whether reports are held for review, and which
+  // transcript source they trust.
   const speakBack = options.preferences?.voiceConfirmation ?? true;
   const includeTelemetry = options.preferences?.includeTelemetry ?? true;
+  const holdForReview = options.preferences?.draftReview ?? false;
+  const transcriptPref = options.preferences?.transcriptPreference ?? "auto";
   const issueId = crypto.randomUUID();
   const record: IssueRecord = {
     id: issueId,
@@ -273,9 +287,12 @@ export async function runIssuePipeline(
       stepId: "transcribe",
       name: STEP_NAMES.transcribe,
       run: async (c) => {
-        if (c.providedTranscript?.trim()) {
+        const provided = c.providedTranscript?.trim();
+        // "typed" and "auto" trust the transcript the browser already produced;
+        // "voice" asks the server to re-transcribe the recording itself.
+        if (provided && transcriptPref !== "voice") {
           return {
-            transcript: c.providedTranscript.trim().slice(0, 4000),
+            transcript: provided.slice(0, 4000),
             transcriptSource: c.providedSource
           };
         }
@@ -285,10 +302,13 @@ export async function runIssuePipeline(
             return { transcript: text, transcriptSource: "server-transcription" as TranscriptSource };
           } catch (err) {
             console.warn("[pipeline] Server transcription failed:", err instanceof Error ? err.message : err);
-            return { transcriptSource: "telemetry-only" as TranscriptSource };
+            // Fall back to the browser transcript when one exists; otherwise the
+            // report continues on telemetry alone.
           }
         }
-        return { transcriptSource: "telemetry-only" as TranscriptSource };
+        return provided
+          ? { transcript: provided.slice(0, 4000), transcriptSource: c.providedSource }
+          : { transcriptSource: "telemetry-only" as TranscriptSource };
       }
     },
     {
@@ -385,6 +405,17 @@ matchesJson: JSON.stringify(
       name: STEP_NAMES.publish,
       run: async (c) => {
         const draft = c.draft!;
+        // Owner opt-in draft review: the report stays a complete dashboard
+        // draft instead of being filed, so the developer reads every client
+        // report before it reaches the repository.
+        if (holdForReview) {
+          return {
+            github: {
+              pushed: false,
+              reason: "Draft review is on in your settings — kept in the dashboard for your review."
+            }
+          };
+        }
         // Publishing identity: ONLY the project owner's own OAuth token.
         //
         // The server-wide GITHUB_TOKEN is intentionally NOT a fallback: using
@@ -433,7 +464,42 @@ matchesJson: JSON.stringify(
   ];
 
   const sink = makeTraceSink(issueId);
-  const run = await runWorkflow(steps, ctx, sink);
+  const run = sentryEnabled()
+    ? await runTracedAgent(
+        {
+          "gen_ai.operation.name": "invoke_agent",
+          "gen_ai.agent.name": "voice-triage",
+          "gen_ai.pipeline.name": "git-voice-issue-pipeline",
+          "gen_ai.input.messages": JSON.stringify([
+            {
+              role: "user",
+              parts: [
+                {
+                  type: "text",
+                  content: contentCaptured()
+                    ? (ctx.providedTranscript?.trim().slice(0, 1500) || `Report filed from ${ctx.providedSource}`)
+                    : "report content withheld (SENTRY_CONTENT=off)"
+                }
+              ]
+            }
+          ])
+        },
+        (span, workflowOutcome) => {
+          const attrs: Record<string, string | number | boolean> = {
+            "gitvoice.pipeline.ok": workflowOutcome.ok,
+            "gitvoice.pipeline.duration_ms": workflowOutcome.durationMs,
+            "gitvoice.issue.published": Boolean(ctx.github?.pushed)
+          };
+          if (!workflowOutcome.ok && workflowOutcome.error) {
+            span.setStatus({ code: 2, message: "internal_error" });
+            attrs["error.type"] = "WorkflowStepFailure";
+          }
+          if (ctx.github?.issueNumber) attrs["gitvoice.issue.number"] = ctx.github.issueNumber;
+          return attrs;
+        },
+        () => runWorkflow(steps, ctx, sink)
+      )
+    : await runWorkflow(steps, ctx, sink);
 
   const draft = ctx.draft;
   if (draft) {

@@ -37,7 +37,10 @@ The repository ships `render.yaml`:
 | `GITHUB_DEFAULT_REPO` | optional | `owner/repo` fallback when a project has no repo set. |
 | `GITHUB_WEBHOOK_SECRET` | optional | `openssl rand -hex 32`; enables push-triggered reindexing. |
 | `DASHBOARD_TOKEN` | optional | Bearer token required for dashboard mutations. |
-| `APP_BASE_URL` | optional | Public base URL, rendered in the widget snippet. |
+| `APP_BASE_URL` | optional | Public base URL, rendered in the widget snippet. Also the target of the production self-ping. |
+| `KEEP_WARM` | optional | Set to `off` to disable the production self-ping (e.g. paid plan, dedicated box). |
+| `SENTRY_DSN` | optional | Sentry project DSN — enables agent tracing of the triage pipeline (station spans, model calls with token usage + cost). Unset = tracing disabled, zero overhead. |
+| `SENTRY_CONTENT` | optional | Set to `off` to keep transcripts and prompts off span attributes (latency/token data still recorded). |
 | `DATA_DIR` | optional | Persists issue records + audio snapshots. |
 
 Suggested free-tier database for the pgvector path: any Postgres host with the
@@ -64,11 +67,39 @@ Create the project in the dashboard, copy the snippet shown on its card, and pas
 before `</body>` on the staging site. The widget exposes a single shadow-DOM
 microphone button; it degrades to a typed-report box when no microphone is available.
 
+## Observability (agent tracing)
+
+Set `SENTRY_DSN` (Sentry project key) and every pipeline run reports as an
+agent trace in Sentry's agent model:
+
+- `invoke_agent voice-triage` — the whole run: latency, the incoming report,
+  the drafted outcome, and whether the issue was published.
+- `execute_tool <station>` — one tool span per engine station (ingest,
+  transcribe, locate, correlate, draft, confirm, publish). Failed stations
+  carry an error status and land in Sentry's tool-error views.
+- `chat <model>` / `embeddings <model>` — every hosted model call with the
+  provider, requested and responding model, finish reason, and token usage
+  (input/output/total/cached tokens) straight from the provider's response —
+  that is what drives the latency/tokens/cost breakdowns.
+- Outbound HTTP calls (voice synthesis, GitHub publishing) appear as regular
+  HTTP spans under the tool that made them.
+
+All of it is a no-op without `SENTRY_DSN`: no SDK init, no spans, no behavior
+change. `SENTRY_CONTENT=off` strips transcripts and prompts from attributes
+while keeping latency, token and cost data. For a tracing screenshot, run one
+report through the widget and open the trace in Sentry → Traces.
+
 ## Operational notes
 
-- **Cold starts:** free tiers sleep when idle; the widget allows ~75 s for wake-up and
-  surfaces a retry message if it misses. A 5-minute uptime pinger on `/health` keeps
-  the service warm for demos.
+- **Keep-warm / cold starts:** free-tier web services sleep after ~15 minutes
+  without inbound traffic and then need ~50 s to wake. The server handles this
+  in production by pinging its own public `/health` every **13.5 minutes**
+  (inside the idle window; disable with `KEEP_WARM=off`). The scheduled
+  `keep-warm` GitHub Actions workflow (`*/14 * * * *`) pings the deployment as
+  an outer safety net and also wakes a deployment that already fell asleep —
+  point it elsewhere with the `KEEPALIVE_URL` repository variable. The widget
+  additionally allows ~75 s for wake-up and surfaces a retry message if the
+  server still misses.
 - **Rate limiting:** `/api/issue` is capped per IP (default 8 per 5 min) with
   `Retry-After` headers; tune via `config.limits` in `src/backend/src/config.ts`.
 - **Secrets hygiene:** every key is read from the environment only; the Settings page

@@ -13,7 +13,7 @@ export interface Preferences {
   login: string;
   /** Spoken confirmation after a report is filed. */
   voiceConfirmation: boolean;
-  /** When publishing is impossible, hold the report as a draft for review. */
+  /** Hold every finished report in the dashboard instead of filing to GitHub. */
   draftReview: boolean;
   /** Include captured telemetry in the drafted issue body. */
   includeTelemetry: boolean;
@@ -24,7 +24,9 @@ export interface Preferences {
 
 export const DEFAULT_PREFERENCES: Omit<Preferences, "login" | "updatedAt"> = {
   voiceConfirmation: true,
-  draftReview: true,
+  // New accounts file reports automatically; review-on is an opt-in toggle in
+  // the dashboard for developers who want to read every report first.
+  draftReview: false,
   includeTelemetry: true,
   transcriptPreference: "auto"
 };
@@ -33,7 +35,7 @@ function sanitize(raw: Record<string, unknown>, login: string): Preferences {
   return {
     login,
     voiceConfirmation: raw.voiceConfirmation !== false,
-    draftReview: raw.draftReview !== false,
+    draftReview: raw.draftReview === true,
     includeTelemetry: raw.includeTelemetry !== false,
     transcriptPreference:
       raw.transcriptPreference === "voice" || raw.transcriptPreference === "typed"
@@ -69,7 +71,7 @@ export class PreferenceStore {
         this.prefs.set(login, {
           login,
           voiceConfirmation: r.voice_confirmation !== false,
-          draftReview: r.draft_review !== false,
+          draftReview: r.draft_review === true,
           includeTelemetry: r.include_telemetry !== false,
           transcriptPreference:
             r.transcript_preference === "voice" || r.transcript_preference === "typed"
