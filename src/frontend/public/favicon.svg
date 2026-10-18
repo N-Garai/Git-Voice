@@ -1,10 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="gv" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#0891b2"/>
+    </linearGradient>
+  </defs>
   <rect width="64" height="64" rx="14" fill="#0a0c10"/>
-  <g fill="none" stroke="#22d3ee" stroke-width="3.4">
-    <circle cx="32" cy="32" r="14"/>
-    <g stroke-linecap="round">
-      <path d="M32 8v7M32 49v7M8 32h7M49 32h7M15 15l5 5M44 44l5 5M49 15l-5 5M20 44l-5 5"/>
-    </g>
-    <circle cx="32" cy="32" r="5" fill="#22d3ee" stroke="none"/>
+  <rect x="1" y="1" width="62" height="62" rx="13" fill="none" stroke="#1d2733" stroke-width="1"/>
+  <!-- drive gear -->
+  <g transform="rotate(-8 32 32)">
+    <path d="M54.00 32.00 A22 22 0 0 1 53.38 37.17 L47.97 37.81 A17 17 0 0 1 46.16 41.41 L48.85 46.14 A22 22 0 0 1 45.06 49.71 L40.50 46.72 A17 17 0 0 1 36.80 48.31 L35.82 53.67 A22 22 0 0 1 30.62 53.96 L29.05 48.74 A17 17 0 0 1 25.19 47.58 L21.00 51.05 A22 22 0 0 1 16.83 47.93 L18.98 42.93 A17 17 0 0 1 16.77 39.56 L11.33 39.52 A22 22 0 0 1 10.14 34.45 L15.00 32.00 A17 17 0 0 1 15.48 28.00 L11.33 24.48 A22 22 0 0 1 13.68 19.83 L18.98 21.07 A17 17 0 0 1 21.91 18.32 L21.00 12.95 A22 22 0 0 1 25.79 10.90 L29.05 15.26 A17 17 0 0 1 33.07 15.03 L35.82 10.33 A22 22 0 0 1 40.81 11.84 L40.50 17.28 A17 17 0 0 1 43.72 19.69 L48.85 17.86 A22 22 0 0 1 51.71 22.22 L47.97 26.19 A17 17 0 0 1 48.89 30.11 L54.00 32.00 Z"
+      fill="url(#gv)"/>
+    <!-- bore holes: light, punched through -->
+    <circle cx="32" cy="32" r="10" fill="#0a0c10" opacity="0.35"/>
+    <path d="M32 24v16M25 28l14 8M25 36l14-8" stroke="#0a0c10" stroke-opacity="0.35" stroke-width="2.6"/>
+    <circle cx="32" cy="32" r="4.4" fill="#0a0c10"/>
+    <circle cx="32" cy="32" r="2.4" fill="#e8faff"/>
   </g>
 </svg>
