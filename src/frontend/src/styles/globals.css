@@ -636,13 +636,111 @@ button { font-family: inherit; cursor: pointer; }
 }
 .empty .big { font-size: 34px; margin-bottom: 10px; }
 
-/* Sign-in gate for the dashboard */
-.auth-gate { max-width: 400px; margin: 13vh auto 0; text-align: center; padding: 42px 34px; }
-.auth-gate .big { font-size: 40px; margin-bottom: 6px; }
-.auth-gate h1 { font-family: var(--font-display); font-size: 26px; line-height: 1.25; margin: 10px 0; }
-.auth-gate .text-dim { font-size: 14.5px; line-height: 1.6; margin: 0 0 22px; }
-.auth-gate .auth-gate-btn { display: block; width: 100%; padding: 11px 16px; font-size: 15px; }
-.auth-gate .mono-xs { margin-top: 18px; }
+/* Sign-in / sign-up gate — split brand + auth panels */
+.split-gate { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); min-height: 100vh; }
+
+.auth-brand {
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: space-between; gap: 42px;
+  padding: 46px 54px;
+  border-right: 1px solid var(--line);
+  background:
+    radial-gradient(640px 420px at 20% 6%, var(--glow-1), transparent),
+    radial-gradient(560px 400px at 85% 96%, rgba(167, 139, 250, 0.07), transparent),
+    var(--bg-raised);
+}
+.auth-brand::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0.55;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(620px 460px at 26% 24%, #000 20%, transparent 72%);
+  mask-image: radial-gradient(620px 460px at 26% 24%, #000 20%, transparent 72%);
+}
+.auth-brand > * { position: relative; }
+.auth-brand .brand { align-self: flex-start; }
+.auth-brand .gear-logo svg { animation: none; }
+.auth-kicker {
+  font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.22em;
+  color: var(--cyan); margin: 4px 0 18px;
+}
+.auth-brand h2 {
+  font-family: var(--font-display); font-weight: 700;
+  font-size: clamp(34px, 3.6vw, 54px); line-height: 1.06; letter-spacing: -0.02em;
+}
+.auth-accent { font-style: italic; color: var(--cyan); }
+.auth-brand-sub { color: var(--ink-dim); font-size: 15.5px; line-height: 1.7; margin-top: 16px; max-width: 44ch; }
+.auth-brand-foot { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.04em; color: var(--ink-faint); }
+
+.auth-visual { position: relative; height: 252px; margin-top: 34px; max-width: 372px; }
+.aic-ring {
+  position: absolute; left: 10px; top: 4px; width: 236px; height: 236px;
+  border: 1px solid var(--line-bright); border-radius: 50%; opacity: 0.55;
+}
+.aic-card {
+  position: absolute; left: 36px; top: 30px; width: 254px; transform: rotate(-5deg);
+  background: var(--bg-panel); border: 1px solid var(--line-bright); border-radius: 14px;
+  padding: 18px; box-shadow: 0 26px 60px rgba(0, 0, 0, 0.5);
+}
+.aic-kicker {
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.2em;
+  color: var(--pink); margin-bottom: 8px;
+}
+.aic-title { font-family: var(--font-display); font-size: 16.5px; line-height: 1.35; margin-bottom: 12px; }
+.aic-bar { display: block; height: 7px; border-radius: 99px; background: var(--line-bright); margin-bottom: 8px; }
+.aic-bar.w1 { width: 88%; }
+.aic-bar.w2 { width: 70%; opacity: 0.8; }
+.aic-bar.w3 { width: 52%; opacity: 0.6; }
+.aic-done {
+  display: flex; align-items: center; gap: 7px; margin-top: 12px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.aic-done i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex: none; box-shadow: 0 0 8px rgba(74, 222, 128, 0.7); }
+.aic-chip {
+  position: absolute; right: 6px; bottom: 18px; transform: rotate(2.5deg);
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg-panel); border: 1px solid var(--line-bright); border-radius: 10px;
+  padding: 10px 14px; font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-dim);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+}
+.aic-chip span { color: var(--cyan); }
+
+.auth-panel { display: flex; flex-direction: column; padding: 30px 44px; background: var(--bg); }
+.auth-panel-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.auth-pill {
+  border: 1px solid var(--line-bright); border-radius: 999px; padding: 7px 16px;
+  font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.auth-pill:hover { border-color: var(--cyan); color: var(--cyan); text-decoration: none; }
+.auth-toplink { color: var(--ink-dim); font-size: 13.5px; font-weight: 500; }
+.auth-toplink:hover { color: var(--cyan); text-decoration: none; }
+.auth-mini-brand { display: none; }
+.auth-body { width: min(400px, 100%); margin: auto; padding: 40px 0; }
+.auth-eyebrow {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.2em;
+  color: var(--ink-faint); margin-bottom: 14px;
+}
+.auth-body h1 {
+  font-family: var(--font-display); font-size: 42px; line-height: 1.05; letter-spacing: -0.02em;
+}
+.auth-sub { color: var(--ink-dim); font-size: 15px; line-height: 1.65; margin: 14px 0 30px; }
+.auth-github-btn { width: 100%; padding: 14px 18px; position: relative; }
+.auth-github-label { display: inline-flex; align-items: center; gap: 10px; }
+.auth-btn-arrow {
+  position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+  font-size: 14px; opacity: 0.85;
+}
+.auth-newhere { text-align: center; font-size: 13.5px; color: var(--ink-dim); margin-top: 18px; }
+.auth-newhere strong { color: var(--ink); font-weight: 600; }
+.auth-note { color: var(--ink-faint); font-size: 12.5px; line-height: 1.65; margin: 16px auto 0; max-width: 42ch; }
+.auth-panel-foot {
+  border-top: 1px solid var(--line); padding-top: 18px;
+  font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.06em;
+  color: var(--ink-faint); text-align: center;
+}
 
 /* --------------------------------------------------------------- demo page */
 
@@ -729,6 +827,10 @@ button { font-family: inherit; cursor: pointer; }
   .conveyor::before { display: none; }
   .dash-layout { grid-template-columns: 1fr; }
   .dash-nav { position: static; flex-direction: row; flex-wrap: wrap; }
+  .split-gate { grid-template-columns: 1fr; }
+  .auth-brand { display: none; }
+  .auth-mini-brand { display: inline-flex; margin-bottom: 8px; }
+  .auth-panel { padding: 24px; min-height: 100vh; }
   .store-grid { grid-template-columns: 1fr; }
   .store-cart { position: static; }
   .nav-links a.hide-sm { display: none; }
