@@ -636,6 +636,14 @@ button { font-family: inherit; cursor: pointer; }
 }
 .empty .big { font-size: 34px; margin-bottom: 10px; }
 
+/* Sign-in gate for the dashboard */
+.auth-gate { max-width: 400px; margin: 13vh auto 0; text-align: center; padding: 42px 34px; }
+.auth-gate .big { font-size: 40px; margin-bottom: 6px; }
+.auth-gate h1 { font-family: var(--font-display); font-size: 26px; line-height: 1.25; margin: 10px 0; }
+.auth-gate .text-dim { font-size: 14.5px; line-height: 1.6; margin: 0 0 22px; }
+.auth-gate .auth-gate-btn { display: block; width: 100%; padding: 11px 16px; font-size: 15px; }
+.auth-gate .mono-xs { margin-top: 18px; }
+
 /* --------------------------------------------------------------- demo page */
 
 .demo-store {

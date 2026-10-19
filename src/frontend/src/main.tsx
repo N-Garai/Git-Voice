@@ -18,14 +18,12 @@ function App(): JSX.Element {
 }
 
 /**
- * Dashboard shell gates itself: it verifies the API key with a cheap request
- * and shows the unlock screen when the server rejects anonymous access. This
- * is a UX convenience only — the server is the real enforcement point.
+ * Dashboard shell gates itself: it verifies access with a cheap request and
+ * shows a sign-in screen when the server asks for an account. This is a UX
+ * convenience only — the server is the real enforcement point.
  */
 function DashboardGate(): JSX.Element {
   const [unlocked, setUnlocked] = useState<boolean | null>(null);
-  const [token, setTokenState] = useState("");
-  const [error, setError] = useState("");
 
   useEffect(() => {
     const attempt = async () => {
@@ -43,40 +41,22 @@ function DashboardGate(): JSX.Element {
     return () => window.removeEventListener("focus", onFocus);
   }, []);
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    localStorage.setItem("gv_token", token.trim());
-    window.location.reload();
-  };
-
   if (unlocked === false) {
     return (
       <div className="dash-layout shell">
-        <div className="card" style={{ maxWidth: 520, margin: "12vh auto 0" }}>
-          <h1 className="dash-title" style={{ marginBottom: 8 }}>Dashboard is locked</h1>
-          <p className="text-dim" style={{ fontSize: 14, marginBottom: 18 }}>
-            Report data is private. Paste the dashboard token from your deployment's environment
-            settings, or sign in with GitHub.
+        <div className="card auth-gate">
+          <div className="big" aria-hidden="true">🔒</div>
+          <h1>Sign in to Git-Voice</h1>
+          <p className="text-dim">
+            Your reports, projects and invoices stay private to your GitHub account —
+            the dashboard has no public view.
           </p>
-          <form onSubmit={submit}>
-            <input
-              className="coupon-input-field"
-              type="password"
-              placeholder="Dashboard token"
-              value={token}
-              onChange={(e) => setTokenState(e.target.value)}
-              style={{ marginBottom: 12 }}
-            />
-            {error && <p className="mono-xs" style={{ color: "var(--red)", marginBottom: 12 }}>{error}</p>}
-            <button className="btn btn-primary" type="submit">Unlock</button>
-          </form>
-          <button
-            className="btn btn-ghost btn-sm mt-16"
-            onClick={() => { window.location.href = "/api/auth/github"; }}
-          >
-            Sign in with GitHub instead
-          </button>
+          <a className="btn btn-primary auth-gate-btn" href="/api/auth/github">
+            Sign in with GitHub
+          </a>
+          <p className="mono-xs text-faint">
+            Issues are always filed under your own GitHub identity.
+          </p>
         </div>
       </div>
     );

@@ -4,8 +4,6 @@ import {
   api,
   fetchBlob,
   ApiError,
-  getToken,
-  setToken as setTokenValue,
   type Preferences as PrefsDto,
   type IssueRecordDto,
   type ProjectDto,
@@ -752,9 +750,6 @@ function ProjectsView({ tier }: { tier: Tier }): JSX.Element {
   const [projects, setProjects] = useState<ProjectDto[] | null>(null);
   const [name, setName] = useState("");
   const [repo, setRepo] = useState("");
-  // Operator key: optional. The api client attaches it to every dashboard
-  // call automatically, so this input only needs to write it once.
-  const [token, setToken] = useState(getToken());
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [ghRepos, setGhRepos] = useState<RepoListing[]>([]);
@@ -799,7 +794,7 @@ function ProjectsView({ tier }: { tier: Tier }): JSX.Element {
   useEffect(() => {
     void load().catch((err) => {
       if (err instanceof ApiError && err.status === 401) {
-        setLoadError("This dashboard needs the operator token or a GitHub sign-in.");
+        setLoadError("This dashboard needs a GitHub sign-in.");
         return;
       }
       setProjects([]);
@@ -815,10 +810,6 @@ function ProjectsView({ tier }: { tier: Tier }): JSX.Element {
       if (m.user) loadRepos();
     }).catch(() => undefined);
   }, [load, loadRepos]);
-
-  useEffect(() => {
-    setTokenValue(token);
-  }, [token]);
 
   const create = async () => {
     if (!name.trim()) return;
@@ -945,32 +936,15 @@ function ProjectsView({ tier }: { tier: Tier }): JSX.Element {
     return (
       <div className="empty">
         <div className="big">🔒</div>
-        <p>{loadError}</p>
+        <h2 style={{ fontFamily: "var(--font-display)", color: "var(--ink)", margin: "0 0 8px", fontSize: 22 }}>
+          Sign in to continue
+        </h2>
+        <p>Projects are private to the signed-in GitHub account that owns them.</p>
         <a className="btn btn-primary mt-16" href="/api/auth/github">Sign in with GitHub</a>
         <p className="mono-xs text-faint mt-16">
-          Running this dashboard as the deployment owner instead? Paste the dashboard token:
+          Already signed in?{" "}
+          <button className="btn btn-ghost btn-sm" onClick={() => window.location.reload()}>Try again</button>
         </p>
-        <div style={{ maxWidth: 340, margin: "0 auto", display: "flex", flexDirection: "column", gap: 10 }}>
-          <input
-            className="coupon-input-field"
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="Operator dashboard token"
-            autoComplete="off"
-          />
-          <button
-            className="btn btn-ghost btn-sm"
-            disabled={!token.trim()}
-            onClick={() => {
-              void load().catch(() => {
-                setLoadError("That token was not accepted — check the deployment's dashboard token.");
-              });
-            }}
-          >
-            Load projects with this token
-          </button>
-        </div>
       </div>
     );
   }
