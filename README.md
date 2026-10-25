@@ -190,3 +190,123 @@ CI runs typecheck, tests and build on every push and pull request
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
+
+### `WindowState`
+
+`WindowState` — Documents WindowState (interface) — e.g. under the API or configuration section.
+
+
+### `windows`
+
+`windows` — Documents windows (const) — e.g. under the API or configuration section.
+
+
+### `TarEntry`
+
+`TarEntry` — Documents TarEntry (interface) — e.g. under the API or configuration section.
+
+
+### `checkRateLimit`
+
+`checkRateLimit` — Documents checkRateLimit (function) — e.g. under the API or configuration section.
+
+
+### `FileSignature`
+
+`FileSignature` — Documents FileSignature (interface) — e.g. under the API or configuration section.
+
+
+### `IndexRunResult`
+
+`IndexRunResult` — Documents IndexRunResult (interface) — e.g. under the API or configuration section.
+
+
+### `Tier`
+
+`Tier` — Documents Tier (type) — e.g. under the API or configuration section.
+
+
+### `BLOCK`
+
+`BLOCK` — Documents BLOCK (const) — e.g. under the API or configuration section.
+
+
+### `QuotaClass`
+
+`QuotaClass` — Documents QuotaClass (type) — e.g. under the API or configuration section.
+
+
+### `Entitlement`
+
+`Entitlement` — Documents Entitlement (type) — e.g. under the API or configuration section.
+
+
+### `parseOctal`
+
+`parseOctal` — Documents parseOctal (function) — e.g. under the API or configuration section.
+
+
+### `MAX_FILES_PER_RUN`
+
+`MAX_FILES_PER_RUN` — Documents MAX_FILES_PER_RUN (const) — e.g. under the API or configuration section.
+
+
+### `QuotaDecision`
+
+`QuotaDecision` — Documents QuotaDecision (interface) — e.g. under the API or configuration section.
+
+
+### `buildEntries`
+
+`buildEntries` — Documents buildEntries (function) — e.g. under the API or configuration section.
+
+
+### `PlanSpec`
+
+`PlanSpec` — Documents PlanSpec (interface) — e.g. under the API or configuration section.
+
+
+### `readString`
+
+`readString` — Documents readString (function) — e.g. under the API or configuration section.
+
+
+### `Window`
+
+`Window` — Documents Window (interface) — e.g. under the API or configuration section.
+
+
+### `EXTENSIONLESS_FILES`
+
+`EXTENSIONLESS_FILES` — Documents EXTENSIONLESS_FILES (const) — e.g. under the API or configuration section.
+
+
+### `main`
+
+`main` — Documents main (function) — e.g. under the API or configuration section.
+
+
+### `gunzipTar`
+
+`gunzipTar` — Documents gunzipTar (function) — e.g. under the API or configuration section.
+
+
+### `WINDOW_MS`
+
+`WINDOW_MS` — Documents WINDOW_MS (const) — e.g. under the API or configuration section.
+
+
+### `clientIp`
+
+`clientIp` — Documents clientIp (function) — e.g. under the API or configuration section.
+
+
+### `DOTFILE_PATTERNS`
+
+`DOTFILE_PATTERNS` — Documents DOTFILE_PATTERNS (const) — e.g. under the API or configuration section.
+
+
+### `readTar`
+
+`readTar` — Documents readTar (function) — e.g. under the API or configuration section.
+
